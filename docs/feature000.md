@@ -4,9 +4,9 @@
 
 | 工程 | ステータス | 完了日 | 備考 |
 |---|---|---|---|
-| BD | ⬜ | | |
-| DD | ⬜ | | |
-| CD | ⬜ | | |
+| BD | ✅ | 2026-07-25 | |
+| DD | ✅ | 2026-07-25 | Design Review (Final) approved |
+| CD | ✅ | 2026-07-25 | |
 | UT | ⬜ | | |
 | IT | ⬜ | | |
 | ST | ⬜ | | |
@@ -390,6 +390,47 @@ python-dotenv>=1.0.0
 | `requirements.txt` | 更新 | `anthropic` を削除 |
 
 **注**: `app.py` は削除せず、残置する。`src/bot.py` が新たなエントリポイントとなる（`python src/bot.py` で起動）。将来的に `app.py` を削除するかどうかは別 feature で判断する。
+
+### Change Summary
+
+**`src/__init__.py`**
+空ファイル。`src` をパッケージとして認識させるための宣言。
+
+**`src/config.py` — `ChannelConfig`、定数、`_load_channel_map()`**
+- `ChannelConfig(target, cwd, tmp)` dataclass を定義。
+- `TMUX_SESSION`、`RESPONSE_TIMEOUT`、`POLL_INTERVAL`、`SETTLE_DURATION`、`MAX_MESSAGE_LENGTH` 定数を定義（全て環境変数または固定値から取得）。
+- `_load_channel_map()`: `CHANNEL_MAP_JSON` 環境変数を JSON パースし `dict[str, ChannelConfig]` を返す。環境変数未設定・JSON パースエラー・キー不足のいずれでも `ValueError` を raise して起動クラッシュさせる（サイレント起動禁止）。
+- モジュールロード時に `CHANNEL_MAP = _load_channel_map()` を呼び出し、起動時に即座に検証する。
+
+**`src/channel_state.py` — `ChannelState`、`init_channel_states()`**
+- `ChannelState(target, cwd, tmp, generation=0, is_processing=False, lock=Lock())` dataclass を定義。
+- `init_channel_states(channel_map)`: `CHANNEL_MAP` の各エントリに対応する `ChannelState` を生成して返す。`bot.py` 起動時に1回だけ呼ぶ。
+
+**`src/tmux_handler.py` — tmux サブプロセス操作**
+- `session_exists(session)`: `tmux has-session` で存在確認。`check=False` でゼロ/非ゼロを bool に変換。
+- `window_exists(session, window)`: `tmux list-windows -F "#W"` の出力行に window 名が含まれるか確認。
+- `send_input(session, text, window)`: `subprocess.run(["tmux", "send-keys", "-t", f"{session}:{window}", text, "Enter"], check=True)` をリスト形式で呼ぶ。`shlex.quote` は使用しない（shell が関与しないため不要かつ有害）。送信後 0.3 秒 sleep。
+- `create_window(session, window, cwd)`: `tmux new-window` で window 作成後、1.0 秒 sleep してから `claude --dangerously-skip-permissions` を `send_input` で送信。
+- `ensure_window(session, window, cwd)`: `window_exists` で確認し、存在しなければ `create_window` を呼ぶ。
+
+**`src/file_handler.py` — `send_long_text()`**
+- `len(text) <= MAX_MESSAGE_LENGTH` なら `chat_postMessage`、超過なら `files_upload_v2(filetype="markdown")` で1回送信。送信後リトライなし。`SlackApiError` は呼び出し元へ伝播。
+
+**`src/bot.py` — メインハンドラー・エントリポイント**
+- `_build_prompt(message, response_file)`: メッセージに `[TOP PRIORITY]` 指示を付加。日本語回答、最終回答のみ、指定パスへの Write のみを強制。
+- `_watch_for_response(response_file, channel_id, thread_ts, own_gen, client)`:
+  - バックグラウンドスレッドとして daemon=True で動作。
+  - ポーリングループ先頭で世代失効チェック（`state.generation != own_gen` → return）とタイムアウト判定。
+  - ファイル検出時: `size1` 記録 → `SETTLE_DURATION` sleep → 世代/タイムアウト再チェック → `size2` 取得 → `size1 == size2` なら読み取り・削除・送信してリターン、不一致ならループ先頭へ戻る。
+  - `finally` 節: `state.generation == own_gen` のときのみ `is_processing = False` で解除。
+- `handle_message(event, client, logger)`:
+  - Step 0: `type == "message"` かつ `channel_type != "im"` ならガード return（app_mention との二重処理防止）。
+  - Step 2: チャンネル認可チェックを先頭で実施。
+  - Step 6: `with state.lock:` 内で `is_processing` チェック → `generation += 1` → `is_processing = True` → `own_gen` 記録。
+  - `watcher_started = False` を宣言後、`try` ブロックでステップ 7〜13 を囲む。`Thread.start()` 成功直後に `watcher_started = True`。`finally` では `not watcher_started` のときのみ `is_processing` を解除（ウォッチャー起動後はウォッチャーの `finally` に委譲）。
+- `handle_reset(ack, command, client, logger)`:
+  - `ack()` を最初に呼ぶ。`command["text"] == "all"` で全チャンネルリセット、そうでなければ自チャンネルのみリセット。各リセットは `with state.lock:` 内で `generation += 1` + `is_processing = False` をアトミックに実行。
+- `main()`: `load_dotenv()` → `App` 初期化 → イベント登録 → 全チャンネルの `ensure_window` → `SocketModeHandler.start()`。
 
 ---
 
