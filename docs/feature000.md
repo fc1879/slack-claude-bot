@@ -102,7 +102,7 @@ class ChannelConfig:
 | `TMUX_SESSION` | `str` | `os.environ.get("TMUX_SESSION", "claude_session")` | tmux セッション名 |
 | `RESPONSE_TIMEOUT` | `int` | `int(os.environ.get("RESPONSE_TIMEOUT", "120"))` | 応答待ちタイムアウト秒数 |
 | `POLL_INTERVAL` | `float` | `2.0` | ファイルポーリング間隔（秒） |
-| `SETTLE_DURATION` | `float` | `1.0` | ファイルサイズ安定確認待ち時間（秒） |
+| `SETTLE_DURATION` | `float` | `1.0` | ステージングファイルの書き込み完了を確認するためのサイズ安定待ち時間（秒） |
 | `MAX_MESSAGE_LENGTH` | `int` | `3000` | Slack 投稿の文字数閾値 |
 | `CHANNEL_MAP` | `dict[str, ChannelConfig]` | `_load_channel_map()` で構築 | チャンネル ID → ChannelConfig |
 
@@ -206,6 +206,7 @@ class ChannelState:
 
 #### `_build_prompt(message: str, response_file: str) -> str`
 
+- `staging_file = f"{response_file}.staging"` を導出する
 - 以下の追加文書を `message` に付加して返す（文字列結合）:
 
 ```
@@ -219,24 +220,42 @@ class ChannelState:
 4. 回答は日本語で記述すること。
 
 出力先ファイルパス（このパス以外への書き出し禁止）:
-{response_file}
+{staging_file}
 ```
+
+**注**: Claude Code は `{staging_file}` (`.staging` 拡張子付き) に書き出す。ボットが settle 確認後に `staging_file → response_file` へ原子的にリネームする。Claude Code には `.staging` パスを指示するため、`response_file` ではなく `staging_file` を追加文書に埋め込むこと。
 
 #### `_watch_for_response(response_file: str, channel_id: str, thread_ts: str, own_gen: int, client) -> None`
 
 - バックグラウンドスレッドとして実行される（`threading.Thread(target=..., daemon=True)`）
-- 関数先頭で `state = _channel_states[channel_id]` を取得する。`_channel_states` 辞書自体は初期化後に変更されないため、lock なしでスレッドから参照して安全である。
-- ポーリングループ（`POLL_INTERVAL` 秒間隔）で `response_file` の存在を確認する
-- **タイムアウト判定はポーリングループの先頭で毎回行う。** settle 待ち中もタイムアウトカウントは進み続ける（settle 待ち中にタイムアウトを超過した場合はタイムアウト処理に移行する）。
-- **settle 判定**: ファイルが見つかった時点でサイズを記録し、`SETTLE_DURATION` 秒後に再取得する。サイズが同じであれば書き込み完了とみなす。**サイズが変化していた場合はポーリングループ先頭に戻る**（変化している間は検出済みとみなさない）。
+- 関数先頭で以下を取得・設定する:
+  - `state = _channel_states[channel_id]`（`_channel_states` 辞書自体は初期化後に変更されないため、lock なしでスレッドから参照して安全）
+  - `staging_file = f"{response_file}.staging"`
+- **検出対象は `staging_file`（`.staging` 拡張子付き）**。ポーリングループ（`POLL_INTERVAL` 秒間隔）で `staging_file` の存在を確認する
+- **タイムアウト判定はポーリングループの先頭で毎回行う。**
+
+**settle 判定（ステージングファイル書き込み完了確認）:**
+
+POSIX では `open()` 時にファイルがディレクトリエントリに現れるため、`os.path.exists()` が `True` を返してもファイルへの書き込みが完了していない場合がある。大容量レスポンス（10KB+）では `write()` syscall が複数回発行されるため、ポーリングが部分書き込み中のファイルを検出するリスクがある。settle 判定でこのリスクを軽減する。
+
+- `staging_file` が存在した場合:
+  1. `size1 = os.path.getsize(staging_file)` を取得する
+  2. `SETTLE_DURATION` 秒 `time.sleep` する
+  3. `size2 = os.path.getsize(staging_file)` を再取得する
+  4. `size1 == size2` なら書き込み完了とみなし次の処理へ進む
+  5. `size1 != size2` なら書き込み中とみなし**ポーリングループ先頭に戻る**（`POLL_INTERVAL` 待ちを経由して再チェック）
+  - settle 待ち中（ステップ 2 の `time.sleep`）もタイムアウトカウントは進む。ループ先頭でタイムアウト判定を行うため、settle 待ちがタイムアウトを超過した場合は次のループ先頭でタイムアウト処理に移行する
+
+**ステージングファイルが settle 完了した後の処理:**
+- `os.rename(staging_file, response_file)` を実行する（POSIX 上でアトミック。同一ファイルシステム内での rename は rename(2) syscall で保証される）
+- `response_file` からファイル内容を読み取る
+- `response_file` を削除する（`os.unlink`）
+- `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
+- `finally` 節で `is_processing` 解除（世代一致チェック後）
+
 - ファイル確認前に毎回 `state.generation == own_gen` を確認し、不一致なら即座に終了する（失効スレッド）
 - タイムアウト（`RESPONSE_TIMEOUT` 秒経過）した場合:
   - スレッド返信: `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"`
-  - `finally` 節で `is_processing` 解除（世代一致チェック後）
-- ファイル検出・settle 確認後:
-  - ファイル内容を読み取る
-  - ファイルを削除する（`os.unlink`）
-  - `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
   - `finally` 節で `is_processing` 解除（世代一致チェック後）
 - `is_processing` 解除のコード（`finally` 節内）:
   ```python
@@ -259,10 +278,10 @@ class ChannelState:
      - `state.generation += 1`
      - `state.is_processing = True`
      - `own_gen = state.generation` を記録する
-  7. `response_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")` を構築する
-  8. `response_file` が存在する場合は `os.unlink` で削除する（前世代の残留ファイル除去）
+  7. `response_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")` を構築する。`staging_file = f"{response_file}.staging"` も導出する。
+  8. `response_file` および `staging_file` が存在する場合はそれぞれ `os.unlink` で削除する（前世代の残留ファイル除去）
   9. `ensure_window(TMUX_SESSION, state.target.split(":")[-1], state.cwd)` を呼ぶ
-  10. `full_prompt = _build_prompt(clean_text, response_file)` を呼ぶ
+  10. `full_prompt = _build_prompt(clean_text, response_file)` を呼ぶ（`_build_prompt` 内部で `staging_file` を導出し、追加文書の出力先パスとして使用する）
   11. `tmux_handler.send_input(TMUX_SESSION, full_prompt, window=state.target.split(":")[-1])` を呼ぶ
   12. `client.chat_postMessage(channel=channel_id, text=f"送信しました... [チャンネル: {channel_id}]", thread_ts=thread_ts)` を送信する
   13. `threading.Thread(target=_watch_for_response, args=(response_file, channel_id, thread_ts, own_gen, client), daemon=True).start()` でウォッチャーを起動する
