@@ -23,14 +23,9 @@ _channel_states: dict[str, ChannelState] = init_channel_states(CHANNEL_MAP)
 def _build_prompt(message: str, response_file: str) -> str:
     return (
         f"{message}\n\n"
-        "---\n"
-        "[TOP PRIORITY] 以下の指示に従うこと:\n"
-        "1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のパスに Write ツールで書き出すこと。\n"
-        "2. 途中経過・下書き・部分的な内容を書き出してはならない。\n"
-        "3. `[確認]` のような確認文も最終回答として書き出すこと。\n"
-        "4. 回答は日本語で記述すること。\n"
-        "5. 以下のパス以外へ書き出してはならない。\n\n"
-        f"出力先パス（Write ツールで書き出す先）:\n{response_file}"
+        f"[TOP PRIORITY] {response_file} = sole output channel. "
+        "Write FINAL response via Write tool AFTER all reasoning/work — no drafts, no partial writes. "
+        "([確認]フォーマット等の確認文も最終回答として書き出すこと。日本語で回答すること。)"
     )
 
 
