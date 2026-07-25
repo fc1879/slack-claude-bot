@@ -7,10 +7,10 @@
 | BD | ✅ | 2026-07-25 | |
 | DD | ✅ | 2026-07-25 | Design Review (Final) approved |
 | CD | ✅ | 2026-07-25 | |
-| UT | ⬜ | | |
-| IT | ⬜ | | |
-| ST | ⬜ | | |
-| UAT | ⬜ | | |
+| UT | 🔄 進行中 | | |
+| IT | 🔄 進行中 | | |
+| ST | 🔄 進行中 | | |
+| UAT | 🔄 進行中 | | |
 
 ---
 
@@ -436,19 +436,863 @@ python-dotenv>=1.0.0
 
 ## UT：単体テスト
 
-（Test Designer フェーズで記載）
+---
+
+### T-01: `_load_channel_map` — CHANNEL_MAP_JSON 未設定で ValueError が raise される
+
+- **Phase**: UT
+- **Precondition**: `CHANNEL_MAP_JSON` 環境変数が未設定（または空文字列）の状態で `src/config.py` をインポートする。
+- **Steps**:
+  1. テスト環境の `os.environ` から `CHANNEL_MAP_JSON` を削除または空文字にセットする。
+  2. `from src.config import _load_channel_map` を実行する。
+  3. `_load_channel_map()` を呼び出す。
+- **Expected result**: `ValueError` が raise される。エラーメッセージには `"CHANNEL_MAP_JSON"` という文字列が含まれる。
+- **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"CHANNEL_MAP_JSON"` が含まれる。
+
+---
+
+### T-02: `_load_channel_map` — 不正 JSON で ValueError が raise される
+
+- **Phase**: UT
+- **Precondition**: `CHANNEL_MAP_JSON` 環境変数に `"{invalid json"` をセットする。
+- **Steps**:
+  1. `os.environ["CHANNEL_MAP_JSON"] = "{invalid json"` をセットする。
+  2. `_load_channel_map()` を呼び出す。
+- **Expected result**: `ValueError` が raise される。メッセージには `"not valid JSON"` が含まれる。
+- **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"not valid JSON"` が含まれる。
+
+---
+
+### T-03: `_load_channel_map` — 必須キー不足で ValueError が raise される
+
+- **Phase**: UT
+- **Precondition**: `CHANNEL_MAP_JSON` 環境変数に `target` キーが欠けた JSON をセットする（例: `{"C01": {"cwd": "/p", "tmp": "/t"}}`）。
+- **Steps**:
+  1. `os.environ["CHANNEL_MAP_JSON"] = '{"C01": {"cwd": "/p", "tmp": "/t"}}'` をセットする。
+  2. `_load_channel_map()` を呼び出す。
+- **Expected result**: `ValueError` が raise される。メッセージにはチャンネル ID `"C01"` および欠けたキー名 `"target"` が含まれる。
+- **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"C01"` と `"target"` が含まれる。
+
+---
+
+### T-04: `_load_channel_map` — 正常な JSON で `ChannelConfig` 辞書が返される
+
+- **Phase**: UT
+- **Precondition**: `CHANNEL_MAP_JSON` 環境変数に正常な単チャンネル JSON をセットする。
+- **Steps**:
+  1. `os.environ["CHANNEL_MAP_JSON"] = '{"C01": {"target": "s:w", "cwd": "/p", "tmp": "/t"}}'` をセットする。
+  2. `_load_channel_map()` を呼び出す。
+- **Expected result**: 戻り値は `{"C01": ChannelConfig(target="s:w", cwd="/p", tmp="/t")}` に等しい。
+- **Pass criteria**: `result["C01"].target == "s:w"` かつ `result["C01"].cwd == "/p"` かつ `result["C01"].tmp == "/t"` がすべて `True`。
+
+---
+
+### T-05: `_load_channel_map` — 複数チャンネル JSON で全エントリが正しく生成される
+
+- **Phase**: UT
+- **Precondition**: `CHANNEL_MAP_JSON` に 2 チャンネル分の JSON をセットする。
+- **Steps**:
+  1. `os.environ["CHANNEL_MAP_JSON"] = '{"C01": {"target": "s:w1", "cwd": "/p1", "tmp": "/t1"}, "C02": {"target": "s:w2", "cwd": "/p2", "tmp": "/t2"}}'` をセットする。
+  2. `_load_channel_map()` を呼び出す。
+- **Expected result**: 戻り値に `"C01"` と `"C02"` の両キーが含まれ、各 `ChannelConfig` のフィールドが JSON の値と一致する。
+- **Pass criteria**: `len(result) == 2` かつ `result["C02"].target == "s:w2"` が `True`。
+
+---
+
+### T-06: `init_channel_states` — CHANNEL_MAP の各エントリに対応する `ChannelState` が生成される
+
+- **Phase**: UT
+- **Precondition**: 2 チャンネル分の `ChannelConfig` 辞書を用意する。
+- **Steps**:
+  1. `channel_map = {"C01": ChannelConfig("s:w1", "/p1", "/t1"), "C02": ChannelConfig("s:w2", "/p2", "/t2")}` を生成する。
+  2. `init_channel_states(channel_map)` を呼び出す。
+- **Expected result**: 戻り値は `{"C01": ..., "C02": ...}` の辞書で、各 `ChannelState` の `generation == 0`、`is_processing == False`、`lock` が `threading.Lock` インスタンスである。
+- **Pass criteria**: `len(states) == 2` かつ `states["C01"].generation == 0` かつ `states["C01"].is_processing == False` がすべて `True`。
+
+---
+
+### T-07: `init_channel_states` — 各チャンネルの `lock` が独立したインスタンスである
+
+- **Phase**: UT
+- **Precondition**: 2 チャンネル分の `ChannelConfig` 辞書を用意する。
+- **Steps**:
+  1. T-06 と同様に `init_channel_states(channel_map)` を呼び出す。
+  2. `states["C01"].lock is states["C02"].lock` を評価する。
+- **Expected result**: `False`（2 つのロックは別オブジェクト）。
+- **Pass criteria**: `states["C01"].lock is states["C02"].lock` が `False`。
+
+---
+
+### T-08: `session_exists` — セッションが存在する場合 `True` を返す
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` をモック化し、`returncode=0` を返すよう設定する。
+- **Steps**:
+  1. `subprocess.run` を `MagicMock(returncode=0)` で patch する。
+  2. `session_exists("test_session")` を呼び出す。
+- **Expected result**: `True` が返される。
+- **Pass criteria**: 戻り値が `True`。
+
+---
+
+### T-09: `session_exists` — セッションが存在しない場合 `False` を返す
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` をモック化し、`returncode=1` を返すよう設定する。
+- **Steps**:
+  1. `subprocess.run` を `MagicMock(returncode=1)` で patch する。
+  2. `session_exists("no_such_session")` を呼び出す。
+- **Expected result**: `False` が返される。
+- **Pass criteria**: 戻り値が `False`。
+
+---
+
+### T-10: `window_exists` — 対象ウィンドウが出力に含まれる場合 `True` を返す
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` をモック化し、`returncode=0`、`stdout="project-a\nproject-b\n"` を返すよう設定する。
+- **Steps**:
+  1. `subprocess.run` を patch する。
+  2. `window_exists("claude_session", "project-a")` を呼び出す。
+- **Expected result**: `True` が返される。
+- **Pass criteria**: 戻り値が `True`。
+
+---
+
+### T-11: `window_exists` — 対象ウィンドウが出力に含まれない場合 `False` を返す
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` をモック化し、`returncode=0`、`stdout="other-window\n"` を返すよう設定する。
+- **Steps**:
+  1. `subprocess.run` を patch する。
+  2. `window_exists("claude_session", "project-a")` を呼び出す。
+- **Expected result**: `False` が返される。
+- **Pass criteria**: 戻り値が `False`。
+
+---
+
+### T-12: `window_exists` — セッション自体が存在しない（`returncode != 0`）場合 `False` を返す
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` をモック化し、`returncode=1` を返すよう設定する。
+- **Steps**:
+  1. `subprocess.run` を patch する。
+  2. `window_exists("no_session", "project-a")` を呼び出す。
+- **Expected result**: `False` が返される。
+- **Pass criteria**: 戻り値が `False`。
+
+---
+
+### T-13: `send_input` — tmux コマンドが正しいリスト形式で呼ばれ、0.3 秒 sleep が実行される
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` と `time.sleep` をモック化する。
+- **Steps**:
+  1. `subprocess.run` と `time.sleep` を patch する。
+  2. `send_input("claude_session", "hello world", "project-a")` を呼び出す。
+- **Expected result**: `subprocess.run` が `["tmux", "send-keys", "-t", "claude_session:project-a", "hello world", "Enter"]` というリストで呼ばれる（`check=True`）。`time.sleep` が `0.3` で呼ばれる。`text` 引数に `shlex.quote` によるクォートが含まれない。
+- **Pass criteria**: `subprocess.run.call_args.args[0]` が上記リストに等しく、`time.sleep.call_args.args[0] == 0.3` が `True`。
+
+---
+
+### T-14: `send_input` — `subprocess.run` が `CalledProcessError` を raise した場合、例外が伝播する
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` を `CalledProcessError` を raise するよう patch する。
+- **Steps**:
+  1. `subprocess.run` を `side_effect=CalledProcessError(1, "tmux")` で patch する。
+  2. `send_input("s", "text", "w")` を呼び出す。
+- **Expected result**: `CalledProcessError` が呼び出し元へ伝播する。
+- **Pass criteria**: `pytest.raises(CalledProcessError)` が成功する。
+
+---
+
+### T-15: `create_window` — `new-window` コマンドの後に 1.0 秒 sleep し、`claude` 起動コマンドを送信する
+
+- **Phase**: UT
+- **Precondition**: `subprocess.run` と `time.sleep` をモック化する。`send_input` もモック化する。
+- **Steps**:
+  1. `subprocess.run`、`time.sleep`、`send_input` を patch する。
+  2. `create_window("claude_session", "project-a", "/some/path")` を呼び出す。
+- **Expected result**: `subprocess.run` が `["tmux", "new-window", "-t", "claude_session", "-n", "project-a", "-c", "/some/path"]` で呼ばれる。その後 `time.sleep(1.0)` が呼ばれる。最後に `send_input("claude_session", "claude --dangerously-skip-permissions", "project-a")` が呼ばれる。
+- **Pass criteria**: 上記 3 つの呼び出しがすべて正しい引数で行われ、順序が `new-window` → `sleep(1.0)` → `send_input` であることを call_args_list で確認できる。
+
+---
+
+### T-16: `ensure_window` — ウィンドウが存在しない場合 `create_window` を呼ぶ
+
+- **Phase**: UT
+- **Precondition**: `window_exists` が `False` を返すようモック化する。`create_window` をモック化する。
+- **Steps**:
+  1. `window_exists` を `return_value=False` で patch する。
+  2. `create_window` を patch する。
+  3. `ensure_window("s", "w", "/p")` を呼び出す。
+- **Expected result**: `create_window("s", "w", "/p")` が 1 回呼ばれる。
+- **Pass criteria**: `create_window.call_count == 1` かつ引数が `("s", "w", "/p")` に等しい。
+
+---
+
+### T-17: `ensure_window` — ウィンドウが存在する場合 `create_window` を呼ばない
+
+- **Phase**: UT
+- **Precondition**: `window_exists` が `True` を返すようモック化する。`create_window` をモック化する。
+- **Steps**:
+  1. `window_exists` を `return_value=True` で patch する。
+  2. `create_window` を patch する。
+  3. `ensure_window("s", "w", "/p")` を呼び出す。
+- **Expected result**: `create_window` が呼ばれない。
+- **Pass criteria**: `create_window.call_count == 0`。
+
+---
+
+### T-18: `send_long_text` — テキストが 3000 文字以下の場合 `chat_postMessage` を呼ぶ
+
+- **Phase**: UT
+- **Precondition**: Slack `client` をモック化する。テキストを "a" × 3000 文字（境界値）にする。
+- **Steps**:
+  1. `client = MagicMock()` を用意する。
+  2. `send_long_text(client, "C01", "a" * 3000, "ts123")` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が `channel="C01"`, `text="a"*3000`, `thread_ts="ts123"` で 1 回呼ばれる。`client.files_upload_v2` は呼ばれない。
+- **Pass criteria**: `client.chat_postMessage.call_count == 1` かつ `client.files_upload_v2.call_count == 0`。
+
+---
+
+### T-19: `send_long_text` — テキストが 3001 文字以上の場合 `files_upload_v2` を呼ぶ
+
+- **Phase**: UT
+- **Precondition**: Slack `client` をモック化する。テキストを "a" × 3001 文字（境界値 + 1）にする。
+- **Steps**:
+  1. `client = MagicMock()` を用意する。
+  2. `send_long_text(client, "C01", "a" * 3001, "ts123")` を呼び出す。
+- **Expected result**: `client.files_upload_v2` が `channel="C01"`, `content="a"*3001`, `filename="response.md"`, `filetype="markdown"`, `thread_ts="ts123"` で 1 回呼ばれる。`client.chat_postMessage` は呼ばれない。
+- **Pass criteria**: `client.files_upload_v2.call_count == 1` かつ `client.chat_postMessage.call_count == 0`。
+
+---
+
+### T-20: `send_long_text` — `SlackApiError` が raise された場合、呼び出し元へ伝播する（リトライなし）
+
+- **Phase**: UT
+- **Precondition**: `client.chat_postMessage` が `SlackApiError` を raise するようモック化する。テキストを 100 文字にする。
+- **Steps**:
+  1. `client.chat_postMessage = MagicMock(side_effect=SlackApiError("error", {}))` をセットする。
+  2. `send_long_text(client, "C01", "x" * 100, "ts123")` を呼び出す。
+- **Expected result**: `SlackApiError` が伝播する。`client.chat_postMessage` は 1 回のみ呼ばれる（リトライなし）。
+- **Pass criteria**: `pytest.raises(SlackApiError)` が成功し、`client.chat_postMessage.call_count == 1`。
+
+---
+
+### T-21: `_build_prompt` — 返されるプロンプトに 5 つの必須要素が全て含まれる
+
+- **Phase**: UT
+- **Precondition**: なし。
+- **Steps**:
+  1. `_build_prompt("ユーザーメッセージ", "/tmp/response.txt")` を呼び出す。
+- **Expected result**: 返されたプロンプト文字列に以下が全て含まれる:
+  - `"ユーザーメッセージ"` （元メッセージ）
+  - `"[TOP PRIORITY]"`
+  - `"Write ツールで書き出すこと"`
+  - `"日本語で記述すること"`
+  - `"/tmp/response.txt"` （出力先パス）
+- **Pass criteria**: 上記 5 つの文字列が全て `result` に含まれる（`in` 演算子で確認）。
+
+---
+
+### T-22: `handle_message` — DM ガード: `type=message` かつ `channel_type != "im"` は即座に return する
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` にチャンネル ID が存在する。`client` をモック化する。
+- **Steps**:
+  1. `event = {"type": "message", "channel_type": "channel", "channel": "C01", "ts": "1.0"}` を用意する。
+  2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が一切呼ばれない。`_channel_states["C01"].is_processing` は `False` のまま。
+- **Pass criteria**: `client.chat_postMessage.call_count == 0` かつ `_channel_states["C01"].is_processing == False`。
+
+---
+
+### T-23: `handle_message` — DM（`channel_type=im`）は処理を通過する
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` に DM チャンネル ID を登録する。`tmux_handler.send_input` と `tmux_handler.ensure_window` をモック化する。`threading.Thread` をモック化する。`client` をモック化する。
+- **Steps**:
+  1. `event = {"type": "message", "channel_type": "im", "channel": "C_DM", "ts": "1.0", "text": "こんにちは"}` を用意する。
+  2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: DM ガード (Step 0) を通過し、チャンネル認可チェック以降の処理（「処理中」または「送信しました」返信）が実行される。
+- **Pass criteria**: `client.chat_postMessage.call_count >= 1`。
+
+---
+
+### T-24: `handle_message` — 未登録チャンネルから送信した場合、拒否メッセージが返される
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` に `"C_UNKNOWN"` が存在しない。`client` をモック化する。`event` の `type` を `"app_mention"` にする。
+- **Steps**:
+  1. `event = {"type": "app_mention", "channel": "C_UNKNOWN", "ts": "1.0", "text": "hello"}` を用意する。
+  2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が `text="このチャンネルは未登録です。管理者に連絡してください。"` で 1 回呼ばれる。`_channel_states` の変更はない。
+- **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "このチャンネルは未登録です。管理者に連絡してください。"` が `True`。
+
+---
+
+### T-25: `handle_message` — メンション除去後に空テキストとなる場合、エラーメッセージが返される
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` に `"C01"` が登録されている。`client` をモック化する。
+- **Steps**:
+  1. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "<@U12345>"}` を用意する（メンション除去後は空文字列になる）。
+  2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が `text="メッセージが空です。"` で 1 回呼ばれる。`is_processing` は変化しない。
+- **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "メッセージが空です。"` が `True` かつ `_channel_states["C01"].is_processing == False`。
+
+---
+
+### T-26: `handle_message` — 処理中に同一チャンネルへ送信すると「処理中」メッセージが返される（already_processing フラグ）
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].is_processing = True` を事前にセットする。`client` をモック化する。
+- **Steps**:
+  1. `_channel_states["C01"].is_processing = True` をセットする。
+  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "new message"}` を用意する。
+  3. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が `text="処理中です。完了をお待ちください。/reset で中断できます。"` で 1 回呼ばれる。`is_processing` は `True` のまま。生成番号は変化しない。
+- **Pass criteria**: 返信テキストが `"処理中です。完了をお待ちください。/reset で中断できます。"` に等しく、`_channel_states["C01"].is_processing == True` かつ `_channel_states["C01"].generation` が変化していない。
+
+---
+
+### T-27: `handle_message` — 「処理中」返信はロック外で送信される（already_processing フラグ方式）
+
+- **Phase**: UT
+- **Precondition**: T-26 と同じ設定。`state.lock` を実際の `threading.Lock` のまま使用する。
+- **Steps**:
+  1. T-26 の手順を実行する。
+  2. `handle_message` 呼び出し後、`state.lock.locked()` を確認する。
+- **Expected result**: `handle_message` 返却後にロックは解放されている（`state.lock.locked() == False`）。デッドロックが発生していない。
+- **Pass criteria**: `state.lock.locked() == False` かつ関数呼び出しが完了している（タイムアウトなし）。
+
+---
+
+### T-28: `handle_message` — `tmux send_input` 失敗時に `is_processing` が解除される（watcher_started=False パス）
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].is_processing = False`。`tmux_handler.send_input` が `RuntimeError` を raise するようモック化する。`tmux_handler.ensure_window` をモック化する。`client` をモック化する。
+- **Steps**:
+  1. `tmux_handler.send_input = MagicMock(side_effect=RuntimeError("tmux failed"))` をセットする。
+  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "test"}` を用意する。
+  3. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す（例外を catch する）。
+- **Expected result**: `RuntimeError` が伝播（または `finally` 内で処理）し、`_channel_states["C01"].is_processing` が `False` に戻る。`watcher_started` は `False` のままであった。
+- **Pass criteria**: `handle_message` 返却後（または例外後）に `_channel_states["C01"].is_processing == False`。
+
+---
+
+### T-29: `handle_message` — `Thread.start()` 失敗時に `is_processing` が解除される
+
+- **Phase**: UT
+- **Precondition**: `tmux_handler.send_input` と `tmux_handler.ensure_window` をモック化する。`threading.Thread.start` が `RuntimeError` を raise するよう patch する。`client` をモック化する。
+- **Steps**:
+  1. `threading.Thread` の `start` メソッドを `side_effect=RuntimeError("os error")` で patch する。
+  2. 正常な `app_mention` イベントで `handle_message` を呼び出す。
+- **Expected result**: `RuntimeError` が伝播し、`_channel_states["C01"].is_processing` が `False` に戻る。
+- **Pass criteria**: 呼び出し後に `_channel_states["C01"].is_processing == False`。
+
+---
+
+### T-30: `handle_message` — `Thread.start()` 成功時、`handle_message` の `finally` は `is_processing` を解除しない
+
+- **Phase**: UT
+- **Precondition**: `tmux_handler.send_input`、`tmux_handler.ensure_window`、`threading.Thread` をモック化する（`start()` は成功させる）。`client` をモック化する。
+- **Steps**:
+  1. `threading.Thread` を `MagicMock()` で patch し、`start()` は正常に完了させる。
+  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "hello"}` で `handle_message` を呼び出す。
+  3. `handle_message` 返却直後に `_channel_states["C01"].is_processing` を確認する。
+- **Expected result**: `is_processing` は `True` のまま（ウォッチャースレッドの `finally` に委譲されているため）。
+- **Pass criteria**: `_channel_states["C01"].is_processing == True`。
+
+---
+
+### T-31: `handle_message` — 世代番号とレスポンスファイルパスが正しく構築される
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].generation = 0`。`tmux_handler.*` と `threading.Thread` をモック化する。`client` をモック化する。
+- **Steps**:
+  1. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "hello"}` で `handle_message` を呼び出す。
+  2. `tmux_handler.send_input` へ渡された `text` 引数（`full_prompt`）を確認する。
+- **Expected result**: `send_input` に渡される `full_prompt` に `"claude_bot_response_C01_1.txt"` が含まれる。`_channel_states["C01"].generation == 1`。
+- **Pass criteria**: `full_prompt` に `"claude_bot_response_C01_1.txt"` が含まれ、`generation == 1`。
+
+---
+
+### T-32: `handle_message` — 前世代の残留ファイルが削除される
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].generation = 1`。`state.tmp` ディレクトリに `claude_bot_response_C01_1.txt` が存在する（前世代残留ファイル）。`tmux_handler.*` と `threading.Thread` をモック化する。
+- **Steps**:
+  1. `state.tmp` ディレクトリに `claude_bot_response_C01_1.txt` を作成する。
+  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "test"}` で `handle_message` を呼び出す。（このとき `own_gen` は 2 になり、`prev_file` は `_1.txt` になる）
+  3. ファイルの存否を確認する。
+- **Expected result**: `claude_bot_response_C01_1.txt` が削除されている。
+- **Pass criteria**: `os.path.exists(prev_file) == False`。
+
+---
+
+### T-33: `handle_reset` — 自チャンネルのみ generation をインクリメントし、`is_processing` を `False` にする
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].generation = 5`、`_channel_states["C01"].is_processing = True`。`client` をモック化する。`ack` をモック化する。
+- **Steps**:
+  1. `command = {"channel_id": "C01", "text": ""}` を用意する。
+  2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `_channel_states["C01"].generation == 6`、`_channel_states["C01"].is_processing == False`。`client.chat_postMessage` が `text` に `"チャンネルをリセットしました。(generation=6)"` を含む形で 1 回呼ばれる。
+- **Pass criteria**: `generation == 6` かつ `is_processing == False` かつ `client.chat_postMessage.call_args.kwargs["text"] == "チャンネルをリセットしました。(generation=6)"`。
+
+---
+
+### T-34: `handle_reset` — `/reset all` で全チャンネルがリセットされる
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` に `"C01"` と `"C02"` の 2 チャンネルが登録されている。両方の `is_processing = True`、`generation` はそれぞれ任意の値。`client` をモック化する。
+- **Steps**:
+  1. `command = {"channel_id": "C01", "text": "all"}` を用意する。
+  2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `C01` と `C02` の両方で `is_processing == False` かつ `generation` がインクリメントされている。`client.chat_postMessage` が `text="全チャンネルをリセットしました。"` で 1 回呼ばれる。
+- **Pass criteria**: `_channel_states["C01"].is_processing == False` かつ `_channel_states["C02"].is_processing == False` かつ `client.chat_postMessage.call_args.kwargs["text"] == "全チャンネルをリセットしました。"`。
+
+---
+
+### T-35: `handle_reset` — 未登録チャンネルで呼ばれた場合、拒否メッセージが返される
+
+- **Phase**: UT
+- **Precondition**: `_channel_states` に `"C_UNKNOWN"` が存在しない。`client` をモック化する。
+- **Steps**:
+  1. `command = {"channel_id": "C_UNKNOWN", "text": ""}` を用意する。
+  2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
+- **Expected result**: `client.chat_postMessage` が `text="このチャンネルは未登録です。"` で 1 回呼ばれる。`_channel_states` への変更なし。
+- **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "このチャンネルは未登録です。"` が `True`。
+
+---
+
+### T-36: `handle_reset` — `ack()` が最初に呼ばれる
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"]` が存在する。`ack` をモック化する。
+- **Steps**:
+  1. `ack = MagicMock()` を用意する。
+  2. `command = {"channel_id": "C01", "text": ""}` で `handle_reset` を呼び出す。
+  3. `ack.call_count` を確認する。
+- **Expected result**: `ack()` が 1 回呼ばれている。
+- **Pass criteria**: `ack.call_count == 1`。
+
+---
+
+### T-37: `_watch_for_response` — タイムアウト経過後、タイムアウトメッセージを送信して終了する
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].generation = 1`、`is_processing = True`。対象レスポンスファイルは存在しない。`RESPONSE_TIMEOUT` を 0.1 秒に短縮する（モック）。`client` をモック化する。
+- **Steps**:
+  1. `RESPONSE_TIMEOUT` をモックで `0.1` に設定する（または `time.time` を patch してタイムアウト条件をシミュレートする）。
+  2. `_watch_for_response(response_file, "C01", "ts1", 1, client)` をスレッドで起動し、完了を待つ。
+- **Expected result**: タイムアウトメッセージ `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が `thread_ts="ts1"` で送信される。`is_processing` が `False` になる。
+- **Pass criteria**: `client.chat_postMessage` のテキストが上記タイムアウトメッセージと等しく、`_channel_states["C01"].is_processing == False`。
+
+---
+
+### T-38: `_watch_for_response` — 世代失効（`/reset` 後）でウォッチャーが即座にリターンし、`is_processing` を解除しない
+
+- **Phase**: UT
+- **Precondition**: `_channel_states["C01"].generation = 1`、`is_processing = True`。ウォッチャースレッドは `own_gen=1` で起動。
+- **Steps**:
+  1. `_watch_for_response` をスレッドで起動する（`own_gen=1`）。
+  2. スレッド起動直後に `_channel_states["C01"].generation = 2` に変更する（`/reset` をシミュレート）。
+  3. スレッドが完了するのを待つ。
+- **Expected result**: ウォッチャーが世代失効チェックで即座にリターンする。`_channel_states["C01"].is_processing` は変更されない（`generation != own_gen` で `finally` の解除がスキップされる）。
+- **Pass criteria**: スレッドが短時間（< 1 秒）で完了し、`_channel_states["C01"].is_processing` が `True` のまま（`/reset` が `False` に設定しているべきだが、このテストでは `generation` を直接操作するためリセット処理とは分離して確認する）。
+
+---
+
+### T-39: `_watch_for_response` — settle 判定で size が変化した場合、ポーリングループ先頭に戻る（部分書き込みを読まない）
+
+- **Phase**: UT
+- **Precondition**: テンポラリディレクトリにレスポンスファイルを用意する。`POLL_INTERVAL` と `SETTLE_DURATION` を短縮する。`_channel_states["C01"].generation = 1`、`is_processing = True`。
+- **Steps**:
+  1. `response_file` を作成して `"partial"` を書き込む（`size1 = 7`）。
+  2. ウォッチャースレッドを `own_gen=1` で起動する。
+  3. `SETTLE_DURATION` の sleep 中に `response_file` に追記して `size2 > size1` にする。
+  4. 続いて `response_file` を最終内容で書き直す（size が安定する）。
+  5. スレッドが完了するのを待つ。
+- **Expected result**: サイズ変化が検出された最初のサイクルでは送信されない（ループに戻る）。ファイルサイズが安定した後のサイクルで正しく内容が読み取られ、Slack へ送信される。
+- **Pass criteria**: `client.chat_postMessage` または `client.files_upload_v2` が最終内容で 1 回のみ呼ばれる（中間内容では呼ばれない）。
+
+---
+
+### T-40: `_watch_for_response` — settle 待ち中にファイルが削除された場合、ループ先頭に戻る
+
+- **Phase**: UT
+- **Precondition**: テンポラリディレクトリにレスポンスファイルを用意する。ウォッチャースレッドを起動する。
+- **Steps**:
+  1. `response_file` を作成する。
+  2. ウォッチャーが `size1` を記録した後（`SETTLE_DURATION` sleep 開始後）に `response_file` を削除する。
+  3. その後 `response_file` を正しい内容で再作成する。
+  4. スレッドが完了するのを待つ。
+- **Expected result**: ファイル削除を検出してループ先頭に戻り、再作成後のファイルを正しく検出して Slack へ送信する。
+- **Pass criteria**: `client.chat_postMessage` または `client.files_upload_v2` が 1 回呼ばれ、かつ再作成後の正しい内容が送信される。
+
+---
+
+### T-41: `_watch_for_response` — 正常完了後に `is_processing` が `False` になる
+
+- **Phase**: UT
+- **Precondition**: テンポラリディレクトリにレスポンスファイル（安定したサイズ）を用意する。`_channel_states["C01"].generation = 1`、`is_processing = True`。`client` をモック化する。
+- **Steps**:
+  1. レスポンスファイルを `"final answer"` で作成する（サイズ安定）。
+  2. `_watch_for_response(response_file, "C01", "ts1", 1, client)` をスレッドで起動し完了を待つ。
+- **Expected result**: ファイル内容が読み取られ、`send_long_text` 経由で Slack へ送信される。ファイルが削除される。`_channel_states["C01"].is_processing == False`。
+- **Pass criteria**: スレッド完了後に `_channel_states["C01"].is_processing == False` かつ `os.path.exists(response_file) == False`。
+
+---
 
 ## IT：結合テスト
 
-（Test Designer フェーズで記載）
+（本フェーズはボット本体（`src/bot.py`）を実際の Slack ワークスペースに接続して行う。tmux セッションは実際に起動するか、またはテスト用のスタブセッションを使用する。）
+
+---
+
+### T-42: 登録済みチャンネルへのメンションで「送信しました」メッセージがスレッドに返る
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`CHANNEL_MAP` に `#project-a` チャンネルが登録されている。対応する tmux window が存在する（または `ensure_window` が起動する）。Claude Code がレスポンスファイルを生成するセッションが動いている。
+- **Steps**:
+  1. Slack の `#project-a` チャンネルで `@BotName テスト` とメンションする。
+  2. ボットの返信を待つ（最大 5 秒）。
+- **Expected result**: メンションと同じスレッドに `"送信しました... [チャンネル: {channel_id}]"` が投稿される。`log/bot.log` に受信ログが記録される。
+- **Pass criteria**: Slack UI 上でメンションのスレッドに「送信しました」を含むメッセージが 1 件表示される。
+
+---
+
+### T-43: 未登録チャンネルからのメンションは拒否されスレッド返信される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`CHANNEL_MAP` に `#test-unregistered` は含まれていない。
+- **Steps**:
+  1. `#test-unregistered` チャンネルで `@BotName test` とメンションする。
+- **Expected result**: ボットが同スレッドに `"このチャンネルは未登録です。管理者に連絡してください。"` を返信する。tmux への入力は行われない。
+- **Pass criteria**: `#test-unregistered` チャンネルのスレッドに上記の正確な文字列が 1 件表示される。`tmux capture-pane` で対象チャンネルのウィンドウに新しい入力が送信されていないことを確認できる。
+
+---
+
+### T-44: メンション後 Claude Code が応答ファイルを生成すると、スレッドへ回答が返る
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`#project-a` が登録されている。tmux の Claude Code セッションが動作中。
+- **Steps**:
+  1. `#project-a` で `@BotName 1+1 は？` とメンションする。
+  2. Claude Code が応答ファイルを生成するまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
+- **Expected result**: メンションのスレッドに Claude Code の回答テキストが返信される。レスポンスファイルが削除されている。
+- **Pass criteria**: Slack スレッドに回答メッセージが 1 件表示される。`ls {state.tmp}/claude_bot_response_{channel_id}_*.txt` の結果が空（ファイルが削除済み）。
+
+---
+
+### T-45: 3000 文字以下の回答は `chat_postMessage` で投稿される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。テスト用 Claude Code セッションが短い（≤3000 文字）回答を生成するようにプロンプトを設定する。
+- **Steps**:
+  1. `#project-a` で `@BotName "はい" とだけ答えてください` とメンションする。
+  2. 回答を待つ。
+- **Expected result**: Slack スレッドに通常のテキストメッセージとして回答が表示される（ファイル添付ではない）。`log/bot.log` に `chat_postMessage` に相当するログが記録される。
+- **Pass criteria**: Slack UI で回答がファイルスニペットではなくテキストメッセージとして表示される。
+
+---
+
+### T-46: 3001 文字超の回答は `files_upload_v2` でスニペット投稿される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。テスト用に 3001 文字超の内容を持つレスポンスファイルを `state.tmp` に手動配置する（または Claude Code が長文を生成するよう誘導する）。
+- **Steps**:
+  1. `#project-a` で `@BotName 3001文字以上の回答を生成してください` とメンションする（またはレスポンスファイルを手動配置してウォッチャーを起動）。
+  2. 回答を待つ。
+- **Expected result**: Slack スレッドにファイルスニペット（`response.md`）として回答が添付表示される。テキストメッセージとして投稿されない。
+- **Pass criteria**: Slack UI で `response.md` という名前のファイルスニペットがスレッドに表示される。
+
+---
+
+### T-47: 同一チャンネルへの 2 通目のメッセージは「処理中」で拒否される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`#project-a` が登録されている。Claude Code が処理に時間のかかるプロンプト（例: 長時間 sleep）を受け取った状態にする。
+- **Steps**:
+  1. `#project-a` で `@BotName メッセージA` を送信する（Claude Code が処理中になる）。
+  2. 即座（1 秒以内）に `@BotName メッセージB` を送信する。
+- **Expected result**: メッセージ B に対して `"処理中です。完了をお待ちください。/reset で中断できます。"` がスレッドに返信される。メッセージ A は引き続き処理される。
+- **Pass criteria**: メッセージ B のスレッドに拒否メッセージが 1 件表示される。メッセージ A の処理が最終的に完了して回答が返る。
+
+---
+
+### T-48: 異なるチャンネルへの同時リクエストは並列処理される（互いにブロックしない）
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`#project-a` と `#project-b` の 2 チャンネルが登録されている。それぞれ別の tmux window に対応している。
+- **Steps**:
+  1. `#project-a` で `@BotName メッセージA` を送信する。
+  2. 即座（1 秒以内）に `#project-b` で `@BotName メッセージB` を送信する。
+- **Expected result**: `#project-a` と `#project-b` の両方で「送信しました」メッセージが返る。両チャンネルの処理が互いにブロックせず並列に進む。
+- **Pass criteria**: 両チャンネルで「送信しました」メッセージが表示される（一方が他方の完了を待たない）。各チャンネルの tmux window に別々の入力が送られたことを `tmux capture-pane` で確認できる。
+
+---
+
+### T-49: `/reset` で自チャンネルがリセットされ処理が中断される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`#project-a` が処理中（`is_processing=True`）の状態。
+- **Steps**:
+  1. `#project-a` で `/reset` を実行する。
+- **Expected result**: ボットが `#project-a` に `"チャンネルをリセットしました。(generation=N)"` を投稿する（スレッド外、チャンネルトップに投稿）。その後 `#project-a` へ新しいメンションを送ると処理が受け付けられる。`#project-b` の状態は変化しない。
+- **Pass criteria**: `#project-a` に上記リセットメッセージが 1 件表示される。次のメンションが「処理中」ではなく「送信しました」で受け付けられる。
+
+---
+
+### T-50: `/reset all` で全チャンネルがリセットされる
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。複数チャンネルが処理中の状態。
+- **Steps**:
+  1. いずれかの登録済みチャンネルで `/reset all` を実行する。
+- **Expected result**: ボットが `"全チャンネルをリセットしました。"` を返す。全登録チャンネルで新しいメンションが「処理中」なく受け付けられる。
+- **Pass criteria**: `"全チャンネルをリセットしました。"` が表示され、全チャンネルへのメンションが「送信しました」で受け付けられる。
+
+---
+
+### T-51: レスポンスファイルが生成されない場合、`RESPONSE_TIMEOUT` 後にタイムアウトメッセージが返る
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。`#project-a` が登録されている。Claude Code セッションが意図的に応答ファイルを生成しない状態（例: tmux window が存在するが Claude Code がハング）。`RESPONSE_TIMEOUT` を短い値（例: 10 秒）にセットする。
+- **Steps**:
+  1. `#project-a` で `@BotName テスト` とメンションする。
+  2. `RESPONSE_TIMEOUT` 秒より長く待つ。
+- **Expected result**: メンションのスレッドに `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が返信される。`is_processing` が `False` になり、次のメンションが受け付けられる。
+- **Pass criteria**: タイムアウトメッセージがスレッドに 1 件表示される。タイムアウト後に次のメンションが「処理中」なく受け付けられる。
+
+---
+
+### T-52: `files_upload_v2` の `filetype="markdown"` が Slack API で受け付けられることを確認する
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。3001 文字超のレスポンスファイルをテスト用に用意する。
+- **Steps**:
+  1. 3001 文字超のコンテンツを持つファイルを `state.tmp` に配置してウォッチャーが検出できるようにする。
+  2. Slack の応答を確認する。
+- **Expected result**: `filetype="markdown"` で `files_upload_v2` が成功し、Slack にファイルが表示される。`SlackApiError` は発生しない。
+- **Pass criteria**: Slack スレッドにファイルスニペットが表示される。`log/bot.log` にエラーが記録されない。
+- **注記**: このテストが失敗（`invalid_file_type` エラー）した場合は `filetype="post"` または `filetype` パラメータ省略にフォールバックし、再テストする。
+
+---
+
+### T-53: DM でのメッセージがチャンネルと同様に処理される
+
+- **Phase**: IT
+- **Precondition**: ボットが起動している。DM チャンネル ID が `CHANNEL_MAP` に登録されている。
+- **Steps**:
+  1. ボットに DM を送信する（メンション不要）。
+  2. 応答を待つ。
+- **Expected result**: DM のスレッドに「送信しました」が返り、Claude Code の応答が返信される。DM ガード（Step 0）により二重処理が発生しない。
+- **Pass criteria**: DM スレッドに「送信しました」と最終応答の 2 件が表示される（「送信しました」が 2 回表示されない）。
+
+---
+
+### T-54: `handle_reset` の generation 表示値がリセット直後の正しい値である（表示上のレース確認）
+
+- **Phase**: IT
+- **Precondition**: `#project-a` が登録されている。`generation` が既知の値（例: 3）の状態。
+- **Steps**:
+  1. `#project-a` で `/reset` を実行する。
+- **Expected result**: 返信の `generation=N` の値が 4 以上の整数である（リセット前 + 1 以上）。正確な値が表示されなくてもシステムは正常動作する（DD Final 注記より、表示上のレースは benign）。
+- **Pass criteria**: `"チャンネルをリセットしました。(generation=N)"` が表示され、N が整数である。
+
+---
 
 ## ST：システムテスト
 
-（Test Designer フェーズで記載）
+（本フェーズは本番相当の環境でシステム全体を対象に実施する。再起動、設定変更、異常状態からの復元を含む。）
+
+---
+
+### T-55: ボット再起動後、既存の tmux window に接続し継続処理できる
+
+- **Phase**: ST
+- **Precondition**: ボットが起動中。`#project-a` の tmux window が存在し Claude Code セッションが動いている。
+- **Steps**:
+  1. ボットプロセス（`python src/bot.py`）を停止する（Ctrl+C または `kill`）。
+  2. ボットプロセスを再起動する。
+  3. `#project-a` で `@BotName 再起動後テスト` とメンションする。
+- **Expected result**: 再起動後もボットが正常に起動し（`ensure_window` が既存 window を検出して `create_window` をスキップ）、メンションへの「送信しました」が返る。Claude Code セッションが継続して動作する。
+- **Pass criteria**: 再起動後のメンションに「送信しました」が返り、最終的に Claude Code の回答がスレッドに表示される。
+
+---
+
+### T-56: ボット起動時に tmux window が存在しない場合、自動作成される
+
+- **Phase**: ST
+- **Precondition**: `CHANNEL_MAP` に登録されている tmux window が存在しない（削除または新規セッションの状態）。
+- **Steps**:
+  1. 対象 tmux session を起動する（window は未作成）。
+  2. ボットを起動する（`python src/bot.py`）。
+  3. `#project-a` で `@BotName テスト` とメンションする。
+- **Expected result**: ボット起動時の `ensure_window` 呼び出しで window が自動作成される。`claude --dangerously-skip-permissions` が送信される。メンション処理が正常に完了する。
+- **Pass criteria**: tmux で対象 window が存在することを `tmux list-windows` で確認できる。メンションに「送信しました」が返る。
+
+---
+
+### T-57: `CHANNEL_MAP_JSON` が未設定の場合、ボットが起動クラッシュする（サイレント起動禁止）
+
+- **Phase**: ST
+- **Precondition**: `.env` から `CHANNEL_MAP_JSON` を削除または空文字にする。
+- **Steps**:
+  1. `python src/bot.py` を起動する。
+- **Expected result**: `ValueError: CHANNEL_MAP_JSON environment variable is not set.` が表示され、プロセスが非ゼロ終了コードで終了する。Slack Socket Mode に接続されない。
+- **Pass criteria**: プロセスが起動直後にクラッシュし、終了コードが `0` 以外である。
+
+---
+
+### T-58: `CHANNEL_MAP_JSON` が不正 JSON の場合、ボットが起動クラッシュする
+
+- **Phase**: ST
+- **Precondition**: `.env` の `CHANNEL_MAP_JSON` に `"{invalid"` を設定する。
+- **Steps**:
+  1. `python src/bot.py` を起動する。
+- **Expected result**: `ValueError` が表示されてプロセスが非ゼロ終了コードで終了する。
+- **Pass criteria**: プロセスが起動直後にクラッシュし、終了コードが `0` 以外である。
+
+---
+
+### T-59: `tmp` ディレクトリが存在しない場合、メッセージ受信時に `FileNotFoundError` が発生し `is_processing` が解除される
+
+- **Phase**: ST
+- **Precondition**: ボットが起動している。`CHANNEL_MAP` の `tmp` パスに存在しないディレクトリを設定する。
+- **Steps**:
+  1. `#project-a` で `@BotName テスト` とメンションする。
+  2. Claude Code が応答ファイルを書き出そうとする。
+- **Expected result**: Claude Code の Write ツールが `FileNotFoundError` でエラーになる（ボット側の動作ではない）。ウォッチャースレッドはタイムアウトし、タイムアウトメッセージが Slack へ送信される。`is_processing` は最終的に `False` になる。
+- **Pass criteria**: `RESPONSE_TIMEOUT` 秒後にタイムアウトメッセージがスレッドに表示される。その後のメンションが受け付けられる。
+
+---
+
+### T-60: ボット起動中に tmux セッションが消滅した場合、次のメッセージ受信時に `RuntimeError` が発生し `is_processing` が解除される
+
+- **Phase**: ST
+- **Precondition**: ボットが起動している。`#project-a` の tmux session が動いている。
+- **Steps**:
+  1. tmux session を強制終了する（`tmux kill-session`）。
+  2. `#project-a` で `@BotName テスト` とメンションする。
+- **Expected result**: `send_input` 内の `subprocess.run(check=True)` が `CalledProcessError` を raise する。`watcher_started=False` のため `handle_message` の `finally` が `is_processing` を `False` に戻す。Slack にはエラーが通知されないが、次のメンションは受け付けられる。
+- **Pass criteria**: メンション後にボットがクラッシュせず、次のメンションに対して「送信しました」または「処理中」以外のエラーなく応答できる（`is_processing` が解除されていることの間接確認）。
+
+---
+
+### T-61: 複数チャンネルが同時に処理中でも、それぞれ独立したロックを使用してデッドロックが発生しない
+
+- **Phase**: ST
+- **Precondition**: ボットが起動している。`#project-a` と `#project-b` が登録されている。
+- **Steps**:
+  1. `#project-a` と `#project-b` に同時にメンションを送信する（< 0.5 秒以内）。
+  2. 両方の応答が返るまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
+- **Expected result**: 両チャンネルが互いにブロックせず、それぞれが「送信しました」を返してウォッチャーが動作する。デッドロック・無限待ち・フリーズが発生しない。
+- **Pass criteria**: 両チャンネルの応答がタイムアウト前に返る。`log/bot.log` にデッドロックや例外の記録がない。
+
+---
+
+### T-62: ボットのメモリ状態（`_channel_states`）は再起動で初期化される（`generation=0`、`is_processing=False`）
+
+- **Phase**: ST
+- **Precondition**: ボットが動作中。`#project-a` が `is_processing=True`、`generation=10` の状態。
+- **Steps**:
+  1. ボットを停止して再起動する。
+  2. `#project-a` で `@BotName テスト` とメンションする。
+- **Expected result**: 再起動後は `generation=1`（0 からインクリメント）、`is_processing=False` の初期状態から開始する。メンションが「処理中」に拒否されない。
+- **Pass criteria**: 再起動後のメンションが「送信しました」で受け付けられる。
+
+---
 
 ## UAT：ユーザー受入テスト
 
-（Test Executor フェーズで記載）
+（本フェーズは実運用を想定したユーザー目線での最終確認。iPhone の Slack アプリから操作することを想定する。）
+
+---
+
+### T-63: iPhone の Slack からメンションを送り、Claude Code の回答がスレッドで受け取れる
+
+- **Phase**: UAT
+- **Precondition**: ボットが本番環境で起動している。iPhone に Slack アプリがインストールされている。`#project-a` が登録されている。Claude Code セッションが動作中。
+- **Steps**:
+  1. iPhone の Slack アプリで `#project-a` を開く。
+  2. `@BotName こんにちは` とメンションして送信する。
+  3. スレッドに「送信しました」が返ることを確認する。
+  4. Claude Code の回答がスレッドに返るまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
+- **Expected result**: 「送信しました」が即座に返り、Claude Code の日本語回答がスレッドに表示される。回答は元のメンションと同スレッドに紐付いている。
+- **Pass criteria**: スレッドに「送信しました」と Claude Code の回答が合計 2 件表示される。回答が日本語で記述されている。
+
+---
+
+### T-64: 複数の依頼を続けて送った場合、スレッドで回答が混線しない
+
+- **Phase**: UAT
+- **Precondition**: ボットが起動している。`#project-a` が登録されている。
+- **Steps**:
+  1. `#project-a` で `@BotName 質問A` を送信する。
+  2. 質問 A の「送信しました」を確認した後（処理完了後）、`@BotName 質問B` を送信する。
+  3. 各回答を確認する。
+- **Expected result**: 質問 A の回答が質問 A のスレッドに、質問 B の回答が質問 B のスレッドにそれぞれ返る。スレッド間の混線はない。
+- **Pass criteria**: 質問 A のスレッドには A の回答のみ、質問 B のスレッドには B の回答のみが表示される。
+
+---
+
+### T-65: 処理中に `/reset` で中断し、その後新しい依頼を送れる
+
+- **Phase**: UAT
+- **Precondition**: ボットが起動している。`#project-a` が処理中の状態（長時間かかるプロンプトを送信中）。
+- **Steps**:
+  1. `#project-a` で長時間処理のメンションを送る（`@BotName 10分かかる作業をしてください` 等）。
+  2. 「送信しました」を確認する。
+  3. `#project-a` で `/reset` を実行する。
+  4. `"チャンネルをリセットしました。"` の返信を確認する。
+  5. `#project-a` で新しいメンション `@BotName 新しい依頼` を送る。
+- **Expected result**: `/reset` 後に `"チャンネルをリセットしました。(generation=N)"` が返る。新しいメンションが「処理中」でなく「送信しました」で受け付けられる。
+- **Pass criteria**: 手順 4 でリセットメッセージが表示される。手順 5 のメンションに「送信しました」が返る（「処理中です。」が返らない）。
+
+---
+
+### T-66: 長文回答（3001 文字超）がファイルスニペットとして読みやすく表示される
+
+- **Phase**: UAT
+- **Precondition**: ボットが起動している。Claude Code が長文回答を生成するプロンプトを用意する。
+- **Steps**:
+  1. `#project-a` で `@BotName 詳細な解説を3000文字以上で書いてください` とメンションする。
+  2. 回答を待つ。
+- **Expected result**: スレッドに `response.md` ファイルのスニペットとして回答が表示される。コードブロックが途中で分断されていない。ファイルを開いて全文を確認できる。
+- **Pass criteria**: Slack UI で `response.md` スニペットが表示される。スニペットを開いたときに内容が完全であり、コードブロックが正しく閉じている。
+
+---
+
+### T-67: 別々のプロジェクトチャンネルで並列作業ができる
+
+- **Phase**: UAT
+- **Precondition**: ボットが起動している。`#project-a` と `#project-b` が登録されており、それぞれ別の Claude Code セッションに対応している。
+- **Steps**:
+  1. `#project-a` で `@BotName プロジェクトAの作業` を送信する。
+  2. 即座に `#project-b` で `@BotName プロジェクトBの作業` を送信する。
+  3. 両チャンネルの応答を確認する。
+- **Expected result**: 両チャンネルで「送信しました」が返る。一方の処理が他方の完了を待たずに進む。最終的に両チャンネルに Claude Code の回答が返る。
+- **Pass criteria**: 両チャンネルに「送信しました」と最終回答が表示される。一方の回答が他方のスレッドに混入していない。
+
+---
+
+### T-68: 応答ファイルが生成されない場合、ユーザーにタイムアウト通知が届き次の操作ができる
+
+- **Phase**: UAT
+- **Precondition**: テスト用にタイムアウトを短い値（例: 15 秒）に設定したボットを起動する。Claude Code が応答ファイルを生成しない状態（セッションがビジーまたはハング）を作る。
+- **Steps**:
+  1. `#project-a` で `@BotName テスト` とメンションする。
+  2. タイムアウト秒数（15 秒）が経過するまで待つ。
+  3. タイムアウトメッセージを確認する。
+  4. その後 `/reset` を実行し、新しいメンションを送る。
+- **Expected result**: タイムアウト後にスレッドへ `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が返る。`/reset` 後に次のメンションが受け付けられる。
+- **Pass criteria**: タイムアウトメッセージがスレッドに表示される。`/reset` 後の新しいメンションに「送信しました」が返る。
 
 ## PR
 
