@@ -268,6 +268,7 @@ class ChannelState:
 
 - トリガー: `@app.event("app_mention")` および `@app.event("message")` （DM）
 - 処理手順:
+  0. **二重処理ガード**: `event.get("type") == "message"` かつ `event.get("channel_type") != "im"` の場合、即座に `return` する（チャンネルメッセージは `app_mention` イベントでも発火するため、`message` イベント側では無視する。DM は `channel_type == "im"` のため通過させる）。
   1. `channel_id = event["channel"]`、`thread_ts = event.get("thread_ts") or event["ts"]` を取得する
   2. `channel_id not in _channel_states` なら `client.chat_postMessage(channel=channel_id, text="このチャンネルは未登録です。管理者に連絡してください。", thread_ts=thread_ts)` を送信して `return`
   3. メッセージテキストを取得し、`<@BOTID>` メンション部分を `re.sub(r"<@[A-Z0-9]+>", "", text).strip()` で除去する
@@ -332,7 +333,7 @@ class ChannelState:
 
 - `load_dotenv()` を呼ぶ
 - `App(token=os.environ["SLACK_BOT_TOKEN"])` でアプリを初期化する
-- イベントハンドラーを登録する: `app.event("app_mention")(handle_message)`、`app.event("message")(handle_message)`、`app.command("/reset")(handle_reset)`
+- イベントハンドラーを登録する: `app.event("app_mention")(handle_message)`、`app.event("message")(handle_message)`、`app.command("/reset")(handle_reset)`。`handle_message` はチャンネルメンション（`app_mention`）と DM（`message` + `channel_type == "im"`）の両方を処理するが、`message` イベントがチャンネルで発火した場合はステップ 0 のガードで即座に `return` されるため二重処理は発生しない。
 - `_channel_states` をモジュールレベルで `init_channel_states(CHANNEL_MAP)` で初期化する
 - 全チャンネルの tmux window を `ensure_window` で事前確認する
 - `SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()` を呼ぶ
