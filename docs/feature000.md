@@ -102,7 +102,6 @@ class ChannelConfig:
 | `TMUX_SESSION` | `str` | `os.environ.get("TMUX_SESSION", "claude_session")` | tmux セッション名 |
 | `RESPONSE_TIMEOUT` | `int` | `int(os.environ.get("RESPONSE_TIMEOUT", "120"))` | 応答待ちタイムアウト秒数 |
 | `POLL_INTERVAL` | `float` | `2.0` | ファイルポーリング間隔（秒） |
-| `SETTLE_DURATION` | `float` | `1.0` | ステージングファイルの書き込み完了を確認するためのサイズ安定待ち時間（秒） |
 | `MAX_MESSAGE_LENGTH` | `int` | `3000` | Slack 投稿の文字数閾値 |
 | `CHANNEL_MAP` | `dict[str, ChannelConfig]` | `_load_channel_map()` で構築 | チャンネル ID → ChannelConfig |
 
@@ -204,9 +203,8 @@ class ChannelState:
 |---|---|---|---|
 | `_channel_states` | `dict[str, ChannelState]` | `init_channel_states(CHANNEL_MAP)` | チャンネル ID → ChannelState |
 
-#### `_build_prompt(message: str, response_file: str) -> str`
+#### `_build_prompt(message: str, staging_path: str, final_path: str) -> str`
 
-- `staging_file = f"{response_file}.staging"` を導出する
 - 以下の追加文書を `message` に付加して返す（文字列結合）:
 
 ```
@@ -214,50 +212,49 @@ class ChannelState:
 
 ---
 [TOP PRIORITY] 以下の指示に従うこと:
-1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のパスに Write ツールで書き出すこと。
+1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のステージングパスに Write ツールで書き出すこと。
 2. 途中経過・下書き・部分的な内容を書き出してはならない。
 3. `[確認]` のような確認文も最終回答として書き出すこと。
-4. 回答は日本語で記述すること。
+4. ステージングパスへの書き出しが完了したら、必ず Bash ツールで以下のコマンドを実行すること:
+   mv {staging_path} {final_path}
+5. この mv コマンドは必須である。実行しない場合、ボットは回答を受け取れない。
+6. 回答は日本語で記述すること。
+7. ステージングパス以外のパスへ書き出してはならない。
 
-出力先ファイルパス（このパス以外への書き出し禁止）:
-{staging_file}
+ステージングパス（Write ツールで書き出す先）:
+{staging_path}
+
+最終パス（mv コマンドで移動する先）:
+{final_path}
 ```
 
-**注**: Claude Code は `{staging_file}` (`.staging` 拡張子付き) に書き出す。ボットが settle 確認後に `staging_file → response_file` へ原子的にリネームする。Claude Code には `.staging` パスを指示するため、`response_file` ではなく `staging_file` を追加文書に埋め込むこと。
+**設計意図**: Claude Code が Write ツールで `{staging_path}` に書き出した後、Bash ツールで `mv {staging_path} {final_path}` を実行する。POSIX の `rename(2)` システムコールはアトミックであるため、`final_path` はファイルが完全に書き込まれた後にのみ出現する。ボットは `final_path` のみをポーリングするため、部分書き込みファイルを読むリスクがない（settle 判定不要）。
 
-#### `_watch_for_response(response_file: str, channel_id: str, thread_ts: str, own_gen: int, client) -> None`
+**リスク注記**: Claude Code が Bash ツールで `mv` を実行しない場合（AI の判断ミス等）、ボットはタイムアウトまで待機してユーザーにタイムアウト通知を送信する。この挙動は許容範囲内とみなす。
+
+#### `_watch_for_response(staging_path: str, final_path: str, channel_id: str, thread_ts: str, own_gen: int, client) -> None`
 
 - バックグラウンドスレッドとして実行される（`threading.Thread(target=..., daemon=True)`）
-- 関数先頭で以下を取得・設定する:
+- 関数先頭で以下を取得する:
   - `state = _channel_states[channel_id]`（`_channel_states` 辞書自体は初期化後に変更されないため、lock なしでスレッドから参照して安全）
-  - `staging_file = f"{response_file}.staging"`
-- **検出対象は `staging_file`（`.staging` 拡張子付き）**。ポーリングループ（`POLL_INTERVAL` 秒間隔）で `staging_file` の存在を確認する
+- **検出対象は `final_path` のみ。** Claude Code が `mv {staging_path} {final_path}` を実行した瞬間にのみ `final_path` が出現する。POSIX の `rename(2)` はアトミックであるため、`final_path` が存在する = ファイルは完全に書き込み済みである。settle 判定は不要。
 - **タイムアウト判定はポーリングループの先頭で毎回行う。**
 
-**settle 判定（ステージングファイル書き込み完了確認）:**
+**ポーリングループの動作（`POLL_INTERVAL` 秒間隔）:**
 
-POSIX では `open()` 時にファイルがディレクトリエントリに現れるため、`os.path.exists()` が `True` を返してもファイルへの書き込みが完了していない場合がある。大容量レスポンス（10KB+）では `write()` syscall が複数回発行されるため、ポーリングが部分書き込み中のファイルを検出するリスクがある。settle 判定でこのリスクを軽減する。
+1. ループ先頭でタイムアウト判定: 経過時間が `RESPONSE_TIMEOUT` を超えた場合はタイムアウト処理へ移行する
+2. 世代失効チェック: `state.generation != own_gen` なら即座に終了する（失効スレッド）
+3. `os.path.exists(final_path)` を確認する
+4. 存在する場合:
+   - `final_path` からファイル内容を読み取る
+   - `final_path` を削除する（`os.unlink`）
+   - `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
+   - ループを抜ける
+5. 存在しない場合: `POLL_INTERVAL` 秒 `time.sleep` してループ先頭へ戻る
 
-- `staging_file` が存在した場合:
-  1. `size1 = os.path.getsize(staging_file)` を取得する
-  2. `SETTLE_DURATION` 秒 `time.sleep` する
-  3. `size2 = os.path.getsize(staging_file)` を再取得する
-  4. `size1 == size2` なら書き込み完了とみなし次の処理へ進む
-  5. `size1 != size2` なら書き込み中とみなし**ポーリングループ先頭に戻る**（`POLL_INTERVAL` 待ちを経由して再チェック）
-  - settle 待ち中（ステップ 2 の `time.sleep`）もタイムアウトカウントは進む。ループ先頭でタイムアウト判定を行うため、settle 待ちがタイムアウトを超過した場合は次のループ先頭でタイムアウト処理に移行する
-
-**ステージングファイルが settle 完了した後の処理:**
-- `os.rename(staging_file, response_file)` を実行する（POSIX 上でアトミック。同一ファイルシステム内での rename は rename(2) syscall で保証される）
-- `response_file` からファイル内容を読み取る
-- `response_file` を削除する（`os.unlink`）
-- `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
-- `finally` 節で `is_processing` 解除（世代一致チェック後）
-
-- ファイル確認前に毎回 `state.generation == own_gen` を確認し、不一致なら即座に終了する（失効スレッド）
 - タイムアウト（`RESPONSE_TIMEOUT` 秒経過）した場合:
   - スレッド返信: `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"`
-  - `finally` 節で `is_processing` 解除（世代一致チェック後）
-- `is_processing` 解除のコード（`finally` 節内）:
+- `is_processing` 解除のコード（`finally` 節内、タイムアウト・正常完了・失効終了いずれのパスでも実行される）:
   ```python
   with state.lock:
       if state.generation == own_gen:
@@ -278,13 +275,20 @@ POSIX では `open()` 時にファイルがディレクトリエントリに現�
      - `state.generation += 1`
      - `state.is_processing = True`
      - `own_gen = state.generation` を記録する
-  7. `response_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")` を構築する。`staging_file = f"{response_file}.staging"` も導出する。
-  8. `response_file` および `staging_file` が存在する場合はそれぞれ `os.unlink` で削除する（前世代の残留ファイル除去）
+  7. パスを構築する:
+     - `staging_path = os.path.join(state.tmp, "staging", f"claude_bot_response_{channel_id}_{own_gen}.txt")`
+     - `final_path = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")`
+     - `staging_dir = os.path.join(state.tmp, "staging")`
+     - `staging_dir` が存在しなければ `os.makedirs(staging_dir, exist_ok=True)` で作成する
+  8. 前世代の残留ファイルを除去する（`{channel_id}` と `{own_gen - 1}` で以下を構築してチェック）:
+     - `prev_staging = os.path.join(state.tmp, "staging", f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")`
+     - `prev_final = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")`
+     - それぞれ存在する場合は `os.unlink` で削除する
   9. `ensure_window(TMUX_SESSION, state.target.split(":")[-1], state.cwd)` を呼ぶ
-  10. `full_prompt = _build_prompt(clean_text, response_file)` を呼ぶ（`_build_prompt` 内部で `staging_file` を導出し、追加文書の出力先パスとして使用する）
+  10. `full_prompt = _build_prompt(clean_text, staging_path, final_path)` を呼ぶ
   11. `tmux_handler.send_input(TMUX_SESSION, full_prompt, window=state.target.split(":")[-1])` を呼ぶ
   12. `client.chat_postMessage(channel=channel_id, text=f"送信しました... [チャンネル: {channel_id}]", thread_ts=thread_ts)` を送信する
-  13. `threading.Thread(target=_watch_for_response, args=(response_file, channel_id, thread_ts, own_gen, client), daemon=True).start()` でウォッチャーを起動する
+  13. `threading.Thread(target=_watch_for_response, args=(staging_path, final_path, channel_id, thread_ts, own_gen, client), daemon=True).start()` でウォッチャーを起動する
   - **例外処理**: ステップ 6 の `with state.lock:` ブロックが閉じた直後に `watcher_started = False` フラグを宣言し、ステップ 7〜13 全体を `try:` ブロックで囲む。`Thread.start()` 成功直後に `watcher_started = True` をセットする。`finally` 節では `not watcher_started` の場合のみ `is_processing` を解除する。構造を以下に示す:
     ```python
     with state.lock:
@@ -293,9 +297,9 @@ POSIX では `open()` 時にファイルがディレクトリエントリに現�
 
     watcher_started = False
     try:
-        # steps 7–12: build prompt, send to tmux, post "送信しました" reply
+        # steps 7–12: build paths, cleanup prev gen files, build prompt, send to tmux, post "送信しました" reply
         ...
-        threading.Thread(target=_watch_for_response, args=(...), daemon=True).start()
+        threading.Thread(target=_watch_for_response, args=(staging_path, final_path, channel_id, thread_ts, own_gen, client), daemon=True).start()
         watcher_started = True  # ← set AFTER successful Thread.start()
     finally:
         if not watcher_started:
