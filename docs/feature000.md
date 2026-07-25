@@ -650,3 +650,51 @@ Status: ✅ Approved
 - `send_input` の `text` はリスト要素としてそのまま渡すこと。`shlex.quote` は適用しない（DD に明記済み）。
 - `files_upload_v2` の `filetype="markdown"` はSlack APIによって実際にサポートされているか確認すること。サポートされていない場合は `filetype="post"` にフォールバックするか、`filetype` を省略すること（DD の指定に従い1回送信、リトライなし）。
 - `_channel_states` はモジュール初期化後に辞書エントリが追加・削除されないこと。スレッドから lock なしで参照するための前提であるため、実行時に辞書を変更するコードを書かないこと。
+
+---
+
+## Design Review (Final)
+
+Status: ✅ Approved
+
+### Scope
+
+This is a full scratch review of the entire DD in its current state. All prior review passes (Pass 1, Pass 2, Pass 3, and CHANNEL_MAP_JSON Addendum) were re-verified from the final text of the DD. No prior review assumption is inherited.
+
+### Key Area Verification
+
+| Area | Check | Result |
+|---|---|---|
+| settle判定 | size1 before sleep → SETTLE_DURATION sleep → generation recheck (4c) → timeout recheck (4d) → re-exists check (4e) → size2 compare → size mismatch loops back with POLL_INTERVAL → settle-delete loops back | ✅ |
+| ChannelState invariants | generation + is_processing R-M-W under `state.lock`; `is_processing` cleared in `finally` with `state.generation == own_gen` guard; `watcher_started` flag correctly separates `handle_message` vs `_watch_for_response` finally responsibilities | ✅ |
+| Response file path | `claude_bot_response_{channel_id}_{gen}.txt` — unique per channel and per generation; prev-gen cleanup on step 8 scoped to same channel_id | ✅ |
+| `_build_prompt` | Single `response_file` path (no staging); Japanese; final answer only; no drafts; TOP PRIORITY; explicit path; prohibits writing elsewhere | ✅ |
+| Slack API non-idempotency | `send_long_text` sends exactly once; `SlackApiError` propagated without retry; no post-send retry loop exists anywhere in DD | ✅ |
+| CHANNEL_MAP_JSON | Loaded from env in `_load_channel_map()`; `ValueError` on parse failure causes startup crash (no silent boot); `cwd`/`tmp` pre-existence documented; not hardcoded | ✅ |
+| Thread replies | `thread_ts = event.get("thread_ts") or event["ts"]` per-request; passed per-generation to watcher as arg; used in `send_long_text`; slash command `/reset` has no originating `thread_ts` — posts to channel directly (correct) | ✅ |
+| Unregistered channel | `handle_message` step 2: `channel_id not in _channel_states` → rejection reply → `return`; no processing proceeds | ✅ |
+| `/reset` scope | Own channel: uses `command["channel_id"]`. All channels: loops all `_channel_states`. Both do `generation += 1` + `is_processing = False` atomically under each `state.lock` | ✅ |
+| DD function-level specification | All functions in all 5 modules (`config.py`, `channel_state.py`, `tmux_handler.py`, `file_handler.py`, `bot.py`) have named parameters, return types, and step-by-step behavior; no vague descriptions | ✅ |
+
+### Review Checklist (DD-applicable items)
+
+| Checklist Item | Result |
+|---|---|
+| 1.3 No user-supplied file paths; path constructed server-side from `state.tmp` + channel_id + gen | ✅ |
+| 2.1 Response file relay design intact | ✅ |
+| 2.2 `[TOP PRIORITY]` + sole output channel instruction in `_build_prompt` | ✅ |
+| 2.3 Path uses `{channel_id}_{gen}` — collision-free across concurrent requests | ✅ |
+| 3.1 ChannelState: R-M-W under lock, finally-block clearing, generation-matched guard | ✅ |
+| 3.3 `/reset` increments generation AND clears `is_processing` atomically | ✅ |
+| 4.2 `thread_ts` passed per-generation to watcher (not per-channel) | ✅ |
+| 5.2 No message splitting — below threshold posts whole, above uploads as file snippet; no code-fence split risk | ✅ |
+| 5.3 3000 char threshold | ✅ |
+| 6.1 Non-idempotent calls sent exactly once, no post-send retry | ✅ |
+| 7.1 No reserved window management issues; bot window not named in CHANNEL_MAP | ✅ |
+
+### Notes for Coder
+
+- `handle_message` step 8 (prev-gen cleanup) runs `os.remove` outside the lock. This is safe because the file is only written by Claude Code (external process), and the watcher for the previous generation will already have exited or reached its finally block before generation is incremented. No race condition with step 8.
+- `handle_reset` reads `state.generation` outside the lock to compose the reply string (`generation={state.generation}`). This is a benign display-only race — the value shown may be stale by nanoseconds in extreme concurrent-reset scenarios, but it has no effect on correctness or ChannelState invariants. No DD change needed.
+- `files_upload_v2` with `filetype="markdown"`: confirm this value is accepted by the Slack API before shipping. If rejected, use `filetype="post"` or omit `filetype`. Either fallback is compliant with the single-send, no-retry constraint.
+- `_channel_states` dict entries must not be added or removed after initialization. This is the precondition for lock-free reads from watcher threads. Do not write code that modifies the dict at runtime.
