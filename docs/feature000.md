@@ -203,7 +203,7 @@ class ChannelState:
 |---|---|---|---|
 | `_channel_states` | `dict[str, ChannelState]` | `init_channel_states(CHANNEL_MAP)` | チャンネル ID → ChannelState |
 
-#### `_build_prompt(message: str, staging_path: str, final_path: str) -> str`
+#### `_build_prompt(message: str, response_file: str) -> str`
 
 - 以下の追加文書を `message` に付加して返す（文字列結合）:
 
@@ -212,45 +212,37 @@ class ChannelState:
 
 ---
 [TOP PRIORITY] 以下の指示に従うこと:
-1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のステージングパスに Write ツールで書き出すこと。
+1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のパスに Write ツールで書き出すこと。
 2. 途中経過・下書き・部分的な内容を書き出してはならない。
 3. `[確認]` のような確認文も最終回答として書き出すこと。
-4. ステージングパスへの書き出しが完了したら、必ず Bash ツールで以下のコマンドを実行すること:
-   mv {staging_path} {final_path}
-5. この mv コマンドは必須である。実行しない場合、ボットは回答を受け取れない。
-6. 回答は日本語で記述すること。
-7. ステージングパス以外のパスへ書き出してはならない。
+4. 回答は日本語で記述すること。
+5. 以下のパス以外へ書き出してはならない。
 
-ステージングパス（Write ツールで書き出す先）:
-{staging_path}
-
-最終パス（mv コマンドで移動する先）:
-{final_path}
+出力先パス（Write ツールで書き出す先）:
+{response_file}
 ```
 
-**設計意図**: Claude Code が Write ツールで `{staging_path}` に書き出した後、Bash ツールで `mv {staging_path} {final_path}` を実行する。POSIX の `rename(2)` システムコールはアトミックであるため、`final_path` はファイルが完全に書き込まれた後にのみ出現する。ボットは `final_path` のみをポーリングするため、部分書き込みファイルを読むリスクがない（settle 判定不要）。
+**設計意図**: Claude Code が Write ツールで `{response_file}` に直接書き出す。ボットはこのパスをポーリングし、ファイルが出現したら読み取る。mv ステップは不要。既存の Telegram Bot と同等のシンプルな設計を維持する。
 
-**リスク注記**: Claude Code が Bash ツールで `mv` を実行しない場合（AI の判断ミス等）、ボットはタイムアウトまで待機してユーザーにタイムアウト通知を送信する。この挙動は許容範囲内とみなす。
-
-#### `_watch_for_response(staging_path: str, final_path: str, channel_id: str, thread_ts: str, own_gen: int, client) -> None`
+#### `_watch_for_response(response_file: str, channel_id: str, thread_ts: str, own_gen: int, client) -> None`
 
 - バックグラウンドスレッドとして実行される（`threading.Thread(target=..., daemon=True)`）
 - 関数先頭で以下を取得する:
   - `state = _channel_states[channel_id]`（`_channel_states` 辞書自体は初期化後に変更されないため、lock なしでスレッドから参照して安全）
-- **検出対象は `final_path` のみ。** Claude Code が `mv {staging_path} {final_path}` を実行した瞬間にのみ `final_path` が出現する。POSIX の `rename(2)` はアトミックであるため、`final_path` が存在する = ファイルは完全に書き込み済みである。settle 判定は不要。
-- **タイムアウト判定はポーリングループの先頭で毎回行う。**
+  - `start_time = time.time()`
+- **検出対象は `response_file` のみ。** Claude Code が Write ツールで直接書き出すファイルをポーリングする。mv ステップなし、settle 判定なし。既存 Telegram Bot と同等のシンプルな実装。
 
 **ポーリングループの動作（`POLL_INTERVAL` 秒間隔）:**
 
-1. ループ先頭でタイムアウト判定: 経過時間が `RESPONSE_TIMEOUT` を超えた場合はタイムアウト処理へ移行する
-2. 世代失効チェック: `state.generation != own_gen` なら即座に終了する（失効スレッド）
-3. `os.path.exists(final_path)` を確認する
-4. 存在する場合:
-   - `final_path` からファイル内容を読み取る
-   - `final_path` を削除する（`os.unlink`）
+1. 世代失効チェック: `with state.lock:` 内で `state.generation != own_gen` なら即座にリターンする（失効スレッド）
+2. `os.path.exists(response_file)` を確認する
+3. 存在する場合:
+   - `response_file` からファイル内容を読み取る
+   - `response_file` を削除する（`os.remove`）
    - `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
-   - ループを抜ける
-5. 存在しない場合: `POLL_INTERVAL` 秒 `time.sleep` してループ先頭へ戻る
+   - ループを抜けてリターンする
+4. タイムアウト判定: `time.time() - start_time >= RESPONSE_TIMEOUT` なら タイムアウト処理へ移行する
+5. `time.sleep(POLL_INTERVAL)` してループ先頭へ戻る
 
 - タイムアウト（`RESPONSE_TIMEOUT` 秒経過）した場合:
   - スレッド返信: `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"`
@@ -276,19 +268,15 @@ class ChannelState:
      - `state.is_processing = True`
      - `own_gen = state.generation` を記録する
   7. パスを構築する:
-     - `staging_path = os.path.join(state.tmp, "staging", f"claude_bot_response_{channel_id}_{own_gen}.txt")`
-     - `final_path = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")`
-     - `staging_dir = os.path.join(state.tmp, "staging")`
-     - `staging_dir` が存在しなければ `os.makedirs(staging_dir, exist_ok=True)` で作成する
+     - `response_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")`
   8. 前世代の残留ファイルを除去する（`{channel_id}` と `{own_gen - 1}` で以下を構築してチェック）:
-     - `prev_staging = os.path.join(state.tmp, "staging", f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")`
-     - `prev_final = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")`
-     - それぞれ存在する場合は `os.unlink` で削除する
+     - `prev_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")`
+     - 存在する場合は `os.remove` で削除する
   9. `ensure_window(TMUX_SESSION, state.target.split(":")[-1], state.cwd)` を呼ぶ
-  10. `full_prompt = _build_prompt(clean_text, staging_path, final_path)` を呼ぶ
+  10. `full_prompt = _build_prompt(clean_text, response_file)` を呼ぶ
   11. `tmux_handler.send_input(TMUX_SESSION, full_prompt, window=state.target.split(":")[-1])` を呼ぶ
   12. `client.chat_postMessage(channel=channel_id, text=f"送信しました... [チャンネル: {channel_id}]", thread_ts=thread_ts)` を送信する
-  13. `threading.Thread(target=_watch_for_response, args=(staging_path, final_path, channel_id, thread_ts, own_gen, client), daemon=True).start()` でウォッチャーを起動する
+  13. `threading.Thread(target=_watch_for_response, args=(response_file, channel_id, thread_ts, own_gen, client), daemon=True).start()` でウォッチャーを起動する
   - **例外処理**: ステップ 6 の `with state.lock:` ブロックが閉じた直後に `watcher_started = False` フラグを宣言し、ステップ 7〜13 全体を `try:` ブロックで囲む。`Thread.start()` 成功直後に `watcher_started = True` をセットする。`finally` 節では `not watcher_started` の場合のみ `is_processing` を解除する。構造を以下に示す:
     ```python
     with state.lock:
@@ -297,9 +285,9 @@ class ChannelState:
 
     watcher_started = False
     try:
-        # steps 7–12: build paths, cleanup prev gen files, build prompt, send to tmux, post "送信しました" reply
+        # steps 7–12: build response_file path, cleanup prev gen file, build prompt, send to tmux, post "送信しました" reply
         ...
-        threading.Thread(target=_watch_for_response, args=(staging_path, final_path, channel_id, thread_ts, own_gen, client), daemon=True).start()
+        threading.Thread(target=_watch_for_response, args=(response_file, channel_id, thread_ts, own_gen, client), daemon=True).start()
         watcher_started = True  # ← set AFTER successful Thread.start()
     finally:
         if not watcher_started:
