@@ -1,0 +1,7 @@
+{
+  "C01234ABCDE": {
+    "target": "claude_session:project-a",
+    "cwd": "/absolute/path/to/project-a",
+    "tmp": "/absolute/path/to/tmp-a"
+  }
+}
