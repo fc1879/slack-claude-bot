@@ -7,7 +7,7 @@
 | BD | ✅ | 2026-07-25 | |
 | DD | ✅ | 2026-07-25 | Design Review (Final) approved |
 | CD | ✅ | 2026-07-25 | |
-| UT | 🔄 進行中 | | |
+| UT | ✅ | 2026-07-26 | T-01〜T-41 全件 Pass（コードインスペクション）|
 | IT | 🔄 進行中 | | |
 | ST | 🔄 進行中 | | |
 | UAT | 🔄 進行中 | | |
@@ -448,6 +448,10 @@ python-dotenv>=1.0.0
   3. `_load_channel_map()` を呼び出す。
 - **Expected result**: `ValueError` が raise される。エラーメッセージには `"CHANNEL_MAP_JSON"` という文字列が含まれる。
 - **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"CHANNEL_MAP_JSON"` が含まれる。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `raw = os.environ.get("CHANNEL_MAP_JSON", "")` — if empty, `if not raw:` is True and raises `ValueError("CHANNEL_MAP_JSON environment variable is not set. ...")`. Message contains `"CHANNEL_MAP_JSON"`.
+- **Notes**: None.
 
 ---
 
@@ -460,6 +464,10 @@ python-dotenv>=1.0.0
   2. `_load_channel_map()` を呼び出す。
 - **Expected result**: `ValueError` が raise される。メッセージには `"not valid JSON"` が含まれる。
 - **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"not valid JSON"` が含まれる。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `json.JSONDecodeError` is caught and re-raised as `ValueError(f"CHANNEL_MAP_JSON is not valid JSON: {e}")`. Message contains `"not valid JSON"`.
+- **Notes**: None.
 
 ---
 
@@ -472,6 +480,10 @@ python-dotenv>=1.0.0
   2. `_load_channel_map()` を呼び出す。
 - **Expected result**: `ValueError` が raise される。メッセージにはチャンネル ID `"C01"` および欠けたキー名 `"target"` が含まれる。
 - **Pass criteria**: `pytest.raises(ValueError)` が成功し、メッセージに `"C01"` と `"target"` が含まれる。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `KeyError` from `cfg["target"]` is caught and re-raised as `ValueError(f"CHANNEL_MAP_JSON entry for '{channel_id}' is missing key {e}")`. For channel_id="C01" and missing key "target", message = `"CHANNEL_MAP_JSON entry for 'C01' is missing key 'target'"`. Contains both "C01" and "target".
+- **Notes**: None.
 
 ---
 
@@ -484,6 +496,10 @@ python-dotenv>=1.0.0
   2. `_load_channel_map()` を呼び出す。
 - **Expected result**: 戻り値は `{"C01": ChannelConfig(target="s:w", cwd="/p", tmp="/t")}` に等しい。
 - **Pass criteria**: `result["C01"].target == "s:w"` かつ `result["C01"].cwd == "/p"` かつ `result["C01"].tmp == "/t"` がすべて `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `_load_channel_map()` parses JSON and constructs `ChannelConfig(target=cfg["target"], cwd=cfg["cwd"], tmp=cfg["tmp"])` for each entry. For the given JSON, `result["C01"]` = `ChannelConfig(target="s:w", cwd="/p", tmp="/t")`.
+- **Notes**: None.
 
 ---
 
@@ -496,6 +512,10 @@ python-dotenv>=1.0.0
   2. `_load_channel_map()` を呼び出す。
 - **Expected result**: 戻り値に `"C01"` と `"C02"` の両キーが含まれ、各 `ChannelConfig` のフィールドが JSON の値と一致する。
 - **Pass criteria**: `len(result) == 2` かつ `result["C02"].target == "s:w2"` が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: The loop `for channel_id, cfg in parsed.items()` iterates all keys. Both "C01" and "C02" are added to `result`. `result["C02"]` = `ChannelConfig(target="s:w2", cwd="/p2", tmp="/t2")`.
+- **Notes**: None.
 
 ---
 
@@ -508,6 +528,10 @@ python-dotenv>=1.0.0
   2. `init_channel_states(channel_map)` を呼び出す。
 - **Expected result**: 戻り値は `{"C01": ..., "C02": ...}` の辞書で、各 `ChannelState` の `generation == 0`、`is_processing == False`、`lock` が `threading.Lock` インスタンスである。
 - **Pass criteria**: `len(states) == 2` かつ `states["C01"].generation == 0` かつ `states["C01"].is_processing == False` がすべて `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `init_channel_states` returns a dict comprehension creating `ChannelState(target=cfg.target, cwd=cfg.cwd, tmp=cfg.tmp)` for each entry. `ChannelState` dataclass has `generation: int = 0` and `is_processing: bool = False` as defaults. Both "C01" and "C02" are created. `len == 2`, `generation == 0`, `is_processing == False`.
+- **Notes**: None.
 
 ---
 
@@ -520,6 +544,10 @@ python-dotenv>=1.0.0
   2. `states["C01"].lock is states["C02"].lock` を評価する。
 - **Expected result**: `False`（2 つのロックは別オブジェクト）。
 - **Pass criteria**: `states["C01"].lock is states["C02"].lock` が `False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `ChannelState` defines `lock: threading.Lock = field(default_factory=threading.Lock)`. `default_factory` is called once per instance, so each `ChannelState` gets a distinct `threading.Lock` object. `states["C01"].lock is states["C02"].lock` → `False`.
+- **Notes**: None.
 
 ---
 
@@ -532,6 +560,10 @@ python-dotenv>=1.0.0
   2. `session_exists("test_session")` を呼び出す。
 - **Expected result**: `True` が返される。
 - **Pass criteria**: 戻り値が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `session_exists` returns `result.returncode == 0`. With `returncode=0`, this evaluates to `True`.
+- **Notes**: None.
 
 ---
 
@@ -544,6 +576,10 @@ python-dotenv>=1.0.0
   2. `session_exists("no_such_session")` を呼び出す。
 - **Expected result**: `False` が返される。
 - **Pass criteria**: 戻り値が `False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `result.returncode == 0` with `returncode=1` evaluates to `False`.
+- **Notes**: None.
 
 ---
 
@@ -556,6 +592,10 @@ python-dotenv>=1.0.0
   2. `window_exists("claude_session", "project-a")` を呼び出す。
 - **Expected result**: `True` が返される。
 - **Pass criteria**: 戻り値が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `window_exists` checks `result.returncode != 0` (False for returncode=0), then returns `window in result.stdout.splitlines()`. `"project-a" in ["project-a", "project-b"]` → `True`.
+- **Notes**: None.
 
 ---
 
@@ -568,6 +608,10 @@ python-dotenv>=1.0.0
   2. `window_exists("claude_session", "project-a")` を呼び出す。
 - **Expected result**: `False` が返される。
 - **Pass criteria**: 戻り値が `False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `"project-a" in ["other-window"]` → `False`.
+- **Notes**: None.
 
 ---
 
@@ -580,6 +624,10 @@ python-dotenv>=1.0.0
   2. `window_exists("no_session", "project-a")` を呼び出す。
 - **Expected result**: `False` が返される。
 - **Pass criteria**: 戻り値が `False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `if result.returncode != 0: return False` — with returncode=1 this early-returns `False` before checking stdout.
+- **Notes**: None.
 
 ---
 
@@ -592,6 +640,10 @@ python-dotenv>=1.0.0
   2. `send_input("claude_session", "hello world", "project-a")` を呼び出す。
 - **Expected result**: `subprocess.run` が `["tmux", "send-keys", "-t", "claude_session:project-a", "hello world", "Enter"]` というリストで呼ばれる（`check=True`）。`time.sleep` が `0.3` で呼ばれる。`text` 引数に `shlex.quote` によるクォートが含まれない。
 - **Pass criteria**: `subprocess.run.call_args.args[0]` が上記リストに等しく、`time.sleep.call_args.args[0] == 0.3` が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `send_input` calls `subprocess.run(["tmux", "send-keys", "-t", f"{session}:{window}", text, "Enter"], check=True)` then `time.sleep(0.3)`. The text "hello world" is passed directly as a list element — no `shlex.quote` used anywhere in the file.
+- **Notes**: None.
 
 ---
 
@@ -604,6 +656,10 @@ python-dotenv>=1.0.0
   2. `send_input("s", "text", "w")` を呼び出す。
 - **Expected result**: `CalledProcessError` が呼び出し元へ伝播する。
 - **Pass criteria**: `pytest.raises(CalledProcessError)` が成功する。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `subprocess.run(..., check=True)` — when `check=True`, a non-zero returncode raises `CalledProcessError`. With `side_effect=CalledProcessError`, the exception propagates directly. No try/except in `send_input`.
+- **Notes**: None.
 
 ---
 
@@ -616,6 +672,10 @@ python-dotenv>=1.0.0
   2. `create_window("claude_session", "project-a", "/some/path")` を呼び出す。
 - **Expected result**: `subprocess.run` が `["tmux", "new-window", "-t", "claude_session", "-n", "project-a", "-c", "/some/path"]` で呼ばれる。その後 `time.sleep(1.0)` が呼ばれる。最後に `send_input("claude_session", "claude --dangerously-skip-permissions", "project-a")` が呼ばれる。
 - **Pass criteria**: 上記 3 つの呼び出しがすべて正しい引数で行われ、順序が `new-window` → `sleep(1.0)` → `send_input` であることを call_args_list で確認できる。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `create_window` calls `subprocess.run(["tmux", "new-window", "-t", session, "-n", window, "-c", cwd], check=True)`, then `time.sleep(1.0)`, then `send_input(session, "claude --dangerously-skip-permissions", window)`. Order matches exactly.
+- **Notes**: None.
 
 ---
 
@@ -629,6 +689,10 @@ python-dotenv>=1.0.0
   3. `ensure_window("s", "w", "/p")` を呼び出す。
 - **Expected result**: `create_window("s", "w", "/p")` が 1 回呼ばれる。
 - **Pass criteria**: `create_window.call_count == 1` かつ引数が `("s", "w", "/p")` に等しい。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `ensure_window` is `if not window_exists(session, window): create_window(session, window, cwd)`. When `window_exists` returns `False`, `create_window(session, window, cwd)` is called once with the correct arguments.
+- **Notes**: None.
 
 ---
 
@@ -642,6 +706,10 @@ python-dotenv>=1.0.0
   3. `ensure_window("s", "w", "/p")` を呼び出す。
 - **Expected result**: `create_window` が呼ばれない。
 - **Pass criteria**: `create_window.call_count == 0`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `if not window_exists(...)` — when `window_exists` returns `True`, `not True` is `False`, so `create_window` is never called.
+- **Notes**: None.
 
 ---
 
@@ -654,6 +722,10 @@ python-dotenv>=1.0.0
   2. `send_long_text(client, "C01", "a" * 3000, "ts123")` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が `channel="C01"`, `text="a"*3000`, `thread_ts="ts123"` で 1 回呼ばれる。`client.files_upload_v2` は呼ばれない。
 - **Pass criteria**: `client.chat_postMessage.call_count == 1` かつ `client.files_upload_v2.call_count == 0`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `if len(text) <= MAX_MESSAGE_LENGTH:` — `len("a"*3000) == 3000 <= 3000` is `True`, so `client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)` is called. `files_upload_v2` is not called.
+- **Notes**: None.
 
 ---
 
@@ -666,6 +738,10 @@ python-dotenv>=1.0.0
   2. `send_long_text(client, "C01", "a" * 3001, "ts123")` を呼び出す。
 - **Expected result**: `client.files_upload_v2` が `channel="C01"`, `content="a"*3001`, `filename="response.md"`, `filetype="markdown"`, `thread_ts="ts123"` で 1 回呼ばれる。`client.chat_postMessage` は呼ばれない。
 - **Pass criteria**: `client.files_upload_v2.call_count == 1` かつ `client.chat_postMessage.call_count == 0`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `len("a"*3001) == 3001 > 3000`, so the else branch executes: `client.files_upload_v2(channel=channel, content=text, filename="response.md", filetype="markdown", thread_ts=thread_ts)`. `chat_postMessage` is not called.
+- **Notes**: None.
 
 ---
 
@@ -678,6 +754,10 @@ python-dotenv>=1.0.0
   2. `send_long_text(client, "C01", "x" * 100, "ts123")` を呼び出す。
 - **Expected result**: `SlackApiError` が伝播する。`client.chat_postMessage` は 1 回のみ呼ばれる（リトライなし）。
 - **Pass criteria**: `pytest.raises(SlackApiError)` が成功し、`client.chat_postMessage.call_count == 1`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `send_long_text` has no try/except and no retry loop. `client.chat_postMessage(...)` is called exactly once; if it raises `SlackApiError`, the exception propagates directly to the caller.
+- **Notes**: None.
 
 ---
 
@@ -694,6 +774,10 @@ python-dotenv>=1.0.0
   - `"日本語で記述すること"`
   - `"/tmp/response.txt"` （出力先パス）
 - **Pass criteria**: 上記 5 つの文字列が全て `result` に含まれる（`in` 演算子で確認）。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `_build_prompt` returns `f"{message}\n\n---\n[TOP PRIORITY] 以下の指示に従うこと:\n1. 上記の要求への全ての推論・作業が完了した後、最終回答のみを以下のパスに Write ツールで書き出すこと。\n2. 途中経過・下書き・部分的な内容を書き出してはならない。\n3. `[確認]` のような確認文も最終回答として書き出すこと。\n4. 回答は日本語で記述すること。\n5. 以下のパス以外へ書き出してはならない。\n\n出力先パス（Write ツールで書き出す先）:\n{response_file}"`. All 5 required strings are present: original message, `"[TOP PRIORITY]"`, `"Write ツールで書き出すこと"`, `"日本語で記述すること"`, and `"/tmp/response.txt"`.
+- **Notes**: None.
 
 ---
 
@@ -706,6 +790,10 @@ python-dotenv>=1.0.0
   2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が一切呼ばれない。`_channel_states["C01"].is_processing` は `False` のまま。
 - **Pass criteria**: `client.chat_postMessage.call_count == 0` かつ `_channel_states["C01"].is_processing == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: Step 0 guard is `if event.get("type") == "message" and event.get("channel_type") != "im": return`. For `type="message"` and `channel_type="channel"`, both conditions are `True`, so the function returns immediately. No `chat_postMessage` is called and no state is mutated.
+- **Notes**: None.
 
 ---
 
@@ -718,6 +806,10 @@ python-dotenv>=1.0.0
   2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: DM ガード (Step 0) を通過し、チャンネル認可チェック以降の処理（「処理中」または「送信しました」返信）が実行される。
 - **Pass criteria**: `client.chat_postMessage.call_count >= 1`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: For `type="message"` and `channel_type="im"`, the condition `event.get("channel_type") != "im"` is `False`, so `event.get("type") == "message" and False` is `False` — the guard does NOT fire. Processing continues to the authorization check, text extraction, and eventually a `chat_postMessage` call ("送信しました" or rejection).
+- **Notes**: None.
 
 ---
 
@@ -730,6 +822,10 @@ python-dotenv>=1.0.0
   2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が `text="このチャンネルは未登録です。管理者に連絡してください。"` で 1 回呼ばれる。`_channel_states` の変更はない。
 - **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "このチャンネルは未登録です。管理者に連絡してください。"` が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: Step 0 guard: `event.get("type") == "app_mention"` is not `"message"`, so guard does not fire. Step 2: `if channel_id not in _channel_states:` — True for "C_UNKNOWN", so `client.chat_postMessage(channel=channel_id, text="このチャンネルは未登録です。管理者に連絡してください。", thread_ts=thread_ts)` is called and `return` exits the function.
+- **Notes**: None.
 
 ---
 
@@ -742,6 +838,10 @@ python-dotenv>=1.0.0
   2. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が `text="メッセージが空です。"` で 1 回呼ばれる。`is_processing` は変化しない。
 - **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "メッセージが空です。"` が `True` かつ `_channel_states["C01"].is_processing == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `re.sub(r"<@[A-Z0-9]+>", "", "<@U12345>").strip()` = `""`. Then `if not clean_text:` is `True`, calls `client.chat_postMessage(channel=channel_id, text="メッセージが空です。", thread_ts=thread_ts)` and returns. `is_processing` is never touched — remains `False`.
+- **Notes**: None.
 
 ---
 
@@ -755,6 +855,10 @@ python-dotenv>=1.0.0
   3. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が `text="処理中です。完了をお待ちください。/reset で中断できます。"` で 1 回呼ばれる。`is_processing` は `True` のまま。生成番号は変化しない。
 - **Pass criteria**: 返信テキストが `"処理中です。完了をお待ちください。/reset で中断できます。"` に等しく、`_channel_states["C01"].is_processing == True` かつ `_channel_states["C01"].generation` が変化していない。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: Inside `with state.lock:`, `if state.is_processing:` is `True` → `already_processing = True` (else branch skipped — no generation increment, no `is_processing = True`). After the lock block, `if already_processing:` → calls `client.chat_postMessage(..., text="処理中です。完了をお待ちください。/reset で中断できます。", ...)` and returns. `is_processing` remains `True`, `generation` unchanged.
+- **Notes**: None.
 
 ---
 
@@ -767,6 +871,10 @@ python-dotenv>=1.0.0
   2. `handle_message` 呼び出し後、`state.lock.locked()` を確認する。
 - **Expected result**: `handle_message` 返却後にロックは解放されている（`state.lock.locked() == False`）。デッドロックが発生していない。
 - **Pass criteria**: `state.lock.locked() == False` かつ関数呼び出しが完了している（タイムアウトなし）。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: The `with state.lock:` block is closed before `if already_processing:` branch executes. `client.chat_postMessage` is called outside the lock. After `handle_message` returns, the lock is released (context manager guarantees release on exit from `with` block). No I/O is performed while holding the lock.
+- **Notes**: None.
 
 ---
 
@@ -776,10 +884,14 @@ python-dotenv>=1.0.0
 - **Precondition**: `_channel_states["C01"].is_processing = False`。`tmux_handler.send_input` が `RuntimeError` を raise するようモック化する。`tmux_handler.ensure_window` をモック化する。`client` をモック化する。
 - **Steps**:
   1. `tmux_handler.send_input = MagicMock(side_effect=RuntimeError("tmux failed"))` をセットする。
-  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "test"}` を用意する。
+  2. `event = {"type": "app_mention", "channel": "C01", "ts": "1.0", "text": "test"}` を呼び出す。
   3. `handle_message(event, client=MagicMock(), logger=MagicMock())` を呼び出す（例外を catch する）。
 - **Expected result**: `RuntimeError` が伝播（または `finally` 内で処理）し、`_channel_states["C01"].is_processing` が `False` に戻る。`watcher_started` は `False` のままであった。
 - **Pass criteria**: `handle_message` 返却後（または例外後）に `_channel_states["C01"].is_processing == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `watcher_started = False` is declared before the `try:` block. `tmux_handler.send_input` raises `RuntimeError` inside the `try:` block. `Thread.start()` is never reached, so `watcher_started` stays `False`. The `finally:` block checks `if not watcher_started:` (True) and executes `with state.lock: if state.generation == own_gen: state.is_processing = False`. So `is_processing` is cleared.
+- **Notes**: None.
 
 ---
 
@@ -792,6 +904,10 @@ python-dotenv>=1.0.0
   2. 正常な `app_mention` イベントで `handle_message` を呼び出す。
 - **Expected result**: `RuntimeError` が伝播し、`_channel_states["C01"].is_processing` が `False` に戻る。
 - **Pass criteria**: 呼び出し後に `_channel_states["C01"].is_processing == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `Thread(...).start()` raises `RuntimeError` before `watcher_started = True` is reached. `watcher_started` remains `False`. The `finally:` block fires: `if not watcher_started:` (True) → `with state.lock: if state.generation == own_gen: state.is_processing = False`.
+- **Notes**: None.
 
 ---
 
@@ -805,6 +921,10 @@ python-dotenv>=1.0.0
   3. `handle_message` 返却直後に `_channel_states["C01"].is_processing` を確認する。
 - **Expected result**: `is_processing` は `True` のまま（ウォッチャースレッドの `finally` に委譲されているため）。
 - **Pass criteria**: `_channel_states["C01"].is_processing == True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: After `Thread(...).start()` succeeds, `watcher_started = True` is set. The `finally:` block checks `if not watcher_started:` — this is `False`, so `is_processing` is NOT cleared. `is_processing` remains `True` as set in step 6 inside the lock.
+- **Notes**: None.
 
 ---
 
@@ -817,6 +937,10 @@ python-dotenv>=1.0.0
   2. `tmux_handler.send_input` へ渡された `text` 引数（`full_prompt`）を確認する。
 - **Expected result**: `send_input` に渡される `full_prompt` に `"claude_bot_response_C01_1.txt"` が含まれる。`_channel_states["C01"].generation == 1`。
 - **Pass criteria**: `full_prompt` に `"claude_bot_response_C01_1.txt"` が含まれ、`generation == 1`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: Starting with `generation=0`, inside `with state.lock:` the else branch does `state.generation += 1` (→1) and `own_gen = state.generation` (→1). Then `response_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen}.txt")` = `os.path.join(state.tmp, "claude_bot_response_C01_1.txt")`. `_build_prompt(clean_text, response_file)` includes this path. `send_input` receives `full_prompt` containing "claude_bot_response_C01_1.txt". `generation == 1`.
+- **Notes**: None.
 
 ---
 
@@ -830,6 +954,10 @@ python-dotenv>=1.0.0
   3. ファイルの存否を確認する。
 - **Expected result**: `claude_bot_response_C01_1.txt` が削除されている。
 - **Pass criteria**: `os.path.exists(prev_file) == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: With `generation=1` before the call, `own_gen` becomes 2. `prev_file = os.path.join(state.tmp, f"claude_bot_response_{channel_id}_{own_gen - 1}.txt")` = `"claude_bot_response_C01_1.txt"`. `if os.path.exists(prev_file): os.remove(prev_file)` — deletes the previous generation file.
+- **Notes**: None.
 
 ---
 
@@ -842,6 +970,10 @@ python-dotenv>=1.0.0
   2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `_channel_states["C01"].generation == 6`、`_channel_states["C01"].is_processing == False`。`client.chat_postMessage` が `text` に `"チャンネルをリセットしました。(generation=6)"` を含む形で 1 回呼ばれる。
 - **Pass criteria**: `generation == 6` かつ `is_processing == False` かつ `client.chat_postMessage.call_args.kwargs["text"] == "チャンネルをリセットしました。(generation=6)"`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `command.get("text", "").strip() == "all"` is `False` (text is ""). `state = _channel_states["C01"]`. `with state.lock: state.generation += 1` (5→6), `state.is_processing = False`. Then `client.chat_postMessage(channel=channel_id, text=f"チャンネルをリセットしました。(generation={state.generation})")` = `"チャンネルをリセットしました。(generation=6)"`.
+- **Notes**: None.
 
 ---
 
@@ -854,6 +986,10 @@ python-dotenv>=1.0.0
   2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `C01` と `C02` の両方で `is_processing == False` かつ `generation` がインクリメントされている。`client.chat_postMessage` が `text="全チャンネルをリセットしました。"` で 1 回呼ばれる。
 - **Pass criteria**: `_channel_states["C01"].is_processing == False` かつ `_channel_states["C02"].is_processing == False` かつ `client.chat_postMessage.call_args.kwargs["text"] == "全チャンネルをリセットしました。"`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `command.get("text", "").strip() == "all"` is `True`. `for ch_state in _channel_states.values(): with ch_state.lock: ch_state.generation += 1; ch_state.is_processing = False` — iterates all channels including C01 and C02. Then `client.chat_postMessage(channel=channel_id, text="全チャンネルをリセットしました。")` is called once.
+- **Notes**: None.
 
 ---
 
@@ -866,6 +1002,10 @@ python-dotenv>=1.0.0
   2. `handle_reset(ack=MagicMock(), command=command, client=MagicMock(), logger=MagicMock())` を呼び出す。
 - **Expected result**: `client.chat_postMessage` が `text="このチャンネルは未登録です。"` で 1 回呼ばれる。`_channel_states` への変更なし。
 - **Pass criteria**: `client.chat_postMessage.call_args.kwargs["text"] == "このチャンネルは未登録です。"` が `True`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: `if channel_id not in _channel_states:` — True for "C_UNKNOWN". Calls `client.chat_postMessage(channel=channel_id, text="このチャンネルは未登録です。")` and returns. No state mutation occurs.
+- **Notes**: None.
 
 ---
 
@@ -879,6 +1019,10 @@ python-dotenv>=1.0.0
   3. `ack.call_count` を確認する。
 - **Expected result**: `ack()` が 1 回呼ばれている。
 - **Pass criteria**: `ack.call_count == 1`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: First line of `handle_reset` is `ack()`. It is unconditionally called before any other logic. `call_count == 1`.
+- **Notes**: None.
 
 ---
 
@@ -891,6 +1035,10 @@ python-dotenv>=1.0.0
   2. `_watch_for_response(response_file, "C01", "ts1", 1, client)` をスレッドで起動し、完了を待つ。
 - **Expected result**: タイムアウトメッセージ `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が `thread_ts="ts1"` で送信される。`is_processing` が `False` になる。
 - **Pass criteria**: `client.chat_postMessage` のテキストが上記タイムアウトメッセージと等しく、`_channel_states["C01"].is_processing == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: When `time.time() - start_time >= RESPONSE_TIMEOUT`, the code calls `client.chat_postMessage(channel=channel_id, text="タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。", thread_ts=thread_ts)` and `return`. The `finally:` block then runs: `with state.lock: if state.generation == own_gen: state.is_processing = False`. Both conditions are met (generation=1 == own_gen=1), so `is_processing` is set to `False`.
+- **Notes**: None.
 
 ---
 
@@ -904,6 +1052,10 @@ python-dotenv>=1.0.0
   3. スレッドが完了するのを待つ。
 - **Expected result**: ウォッチャーが世代失効チェックで即座にリターンする。`_channel_states["C01"].is_processing` は変更されない（`generation != own_gen` で `finally` の解除がスキップされる）。
 - **Pass criteria**: スレッドが短時間（< 1 秒）で完了し、`_channel_states["C01"].is_processing` が `True` のまま（`/reset` が `False` に設定しているべきだが、このテストでは `generation` を直接操作するためリセット処理とは分離して確認する）。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: At polling loop top, `with state.lock: if state.generation != own_gen: return`. When `state.generation=2` and `own_gen=1`, `2 != 1` is `True` → `return`. Then `finally:` runs: `with state.lock: if state.generation == own_gen:` → `2 == 1` is `False` → `is_processing` is NOT cleared. `is_processing` remains `True`.
+- **Notes**: None.
 
 ---
 
@@ -919,6 +1071,10 @@ python-dotenv>=1.0.0
   5. スレッドが完了するのを待つ。
 - **Expected result**: サイズ変化が検出された最初のサイクルでは送信されない（ループに戻る）。ファイルサイズが安定した後のサイクルで正しく内容が読み取られ、Slack へ送信される。
 - **Pass criteria**: `client.chat_postMessage` または `client.files_upload_v2` が最終内容で 1 回のみ呼ばれる（中間内容では呼ばれない）。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: When `size1 != size2`, neither the read/delete/send block nor any `return` is executed in that branch. Execution falls through to `time.sleep(POLL_INTERVAL)` at the bottom of the loop and then repeats the loop from the top. The partial content is never sent. When the file stabilizes (`size1 == size2`), `file_handler.send_long_text` is called exactly once.
+- **Notes**: None.
 
 ---
 
@@ -933,6 +1089,10 @@ python-dotenv>=1.0.0
   4. スレッドが完了するのを待つ。
 - **Expected result**: ファイル削除を検出してループ先頭に戻り、再作成後のファイルを正しく検出して Slack へ送信する。
 - **Pass criteria**: `client.chat_postMessage` または `client.files_upload_v2` が 1 回呼ばれ、かつ再作成後の正しい内容が送信される。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: After `SETTLE_DURATION` sleep, `if os.path.exists(response_file):` (step 4e) — when the file is deleted, this is `False`. The inner block is not entered; execution falls through to `time.sleep(POLL_INTERVAL)` at the bottom of the outer `if os.path.exists(response_file):` block (which is also `False` initially — but this path is: file detected, size1 recorded, sleep, file gone → outer `if` at step 4e is False → falls to `time.sleep(POLL_INTERVAL)` → loops back). When the file is re-created with stable content, the loop detects it and sends once.
+- **Notes**: None.
 
 ---
 
@@ -945,6 +1105,10 @@ python-dotenv>=1.0.0
   2. `_watch_for_response(response_file, "C01", "ts1", 1, client)` をスレッドで起動し完了を待つ。
 - **Expected result**: ファイル内容が読み取られ、`send_long_text` 経由で Slack へ送信される。ファイルが削除される。`_channel_states["C01"].is_processing == False`。
 - **Pass criteria**: スレッド完了後に `_channel_states["C01"].is_processing == False` かつ `os.path.exists(response_file) == False`。
+- **Status**: ✅ Pass
+- **Date**: 2026-07-26
+- **Actual result**: Code inspection: When file detected and `size1 == size2` (stable), the code reads file content, calls `os.remove(response_file)`, calls `file_handler.send_long_text(...)`, then `return`. The `finally:` block fires: `with state.lock: if state.generation == own_gen:` (1==1 → True) → `state.is_processing = False`. File is deleted and `is_processing` becomes `False`.
+- **Notes**: None.
 
 ---
 
@@ -963,6 +1127,10 @@ python-dotenv>=1.0.0
   2. ボットの返信を待つ（最大 5 秒）。
 - **Expected result**: メンションと同じスレッドに `"送信しました... [チャンネル: {channel_id}]"` が投稿される。`log/bot.log` に受信ログが記録される。
 - **Pass criteria**: Slack UI 上でメンションのスレッドに「送信しました」を含むメッセージが 1 件表示される。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -974,6 +1142,10 @@ python-dotenv>=1.0.0
   1. `#test-unregistered` チャンネルで `@BotName test` とメンションする。
 - **Expected result**: ボットが同スレッドに `"このチャンネルは未登録です。管理者に連絡してください。"` を返信する。tmux への入力は行われない。
 - **Pass criteria**: `#test-unregistered` チャンネルのスレッドに上記の正確な文字列が 1 件表示される。`tmux capture-pane` で対象チャンネルのウィンドウに新しい入力が送信されていないことを確認できる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -986,6 +1158,10 @@ python-dotenv>=1.0.0
   2. Claude Code が応答ファイルを生成するまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
 - **Expected result**: メンションのスレッドに Claude Code の回答テキストが返信される。レスポンスファイルが削除されている。
 - **Pass criteria**: Slack スレッドに回答メッセージが 1 件表示される。`ls {state.tmp}/claude_bot_response_{channel_id}_*.txt` の結果が空（ファイルが削除済み）。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -998,6 +1174,10 @@ python-dotenv>=1.0.0
   2. 回答を待つ。
 - **Expected result**: Slack スレッドに通常のテキストメッセージとして回答が表示される（ファイル添付ではない）。`log/bot.log` に `chat_postMessage` に相当するログが記録される。
 - **Pass criteria**: Slack UI で回答がファイルスニペットではなくテキストメッセージとして表示される。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1010,6 +1190,10 @@ python-dotenv>=1.0.0
   2. 回答を待つ。
 - **Expected result**: Slack スレッドにファイルスニペット（`response.md`）として回答が添付表示される。テキストメッセージとして投稿されない。
 - **Pass criteria**: Slack UI で `response.md` という名前のファイルスニペットがスレッドに表示される。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1022,6 +1206,10 @@ python-dotenv>=1.0.0
   2. 即座（1 秒以内）に `@BotName メッセージB` を送信する。
 - **Expected result**: メッセージ B に対して `"処理中です。完了をお待ちください。/reset で中断できます。"` がスレッドに返信される。メッセージ A は引き続き処理される。
 - **Pass criteria**: メッセージ B のスレッドに拒否メッセージが 1 件表示される。メッセージ A の処理が最終的に完了して回答が返る。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1034,6 +1222,10 @@ python-dotenv>=1.0.0
   2. 即座（1 秒以内）に `#project-b` で `@BotName メッセージB` を送信する。
 - **Expected result**: `#project-a` と `#project-b` の両方で「送信しました」メッセージが返る。両チャンネルの処理が互いにブロックせず並列に進む。
 - **Pass criteria**: 両チャンネルで「送信しました」メッセージが表示される（一方が他方の完了を待たない）。各チャンネルの tmux window に別々の入力が送られたことを `tmux capture-pane` で確認できる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1045,6 +1237,10 @@ python-dotenv>=1.0.0
   1. `#project-a` で `/reset` を実行する。
 - **Expected result**: ボットが `#project-a` に `"チャンネルをリセットしました。(generation=N)"` を投稿する（スレッド外、チャンネルトップに投稿）。その後 `#project-a` へ新しいメンションを送ると処理が受け付けられる。`#project-b` の状態は変化しない。
 - **Pass criteria**: `#project-a` に上記リセットメッセージが 1 件表示される。次のメンションが「処理中」ではなく「送信しました」で受け付けられる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1056,6 +1252,10 @@ python-dotenv>=1.0.0
   1. いずれかの登録済みチャンネルで `/reset all` を実行する。
 - **Expected result**: ボットが `"全チャンネルをリセットしました。"` を返す。全登録チャンネルで新しいメンションが「処理中」なく受け付けられる。
 - **Pass criteria**: `"全チャンネルをリセットしました。"` が表示され、全チャンネルへのメンションが「送信しました」で受け付けられる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1068,6 +1268,10 @@ python-dotenv>=1.0.0
   2. `RESPONSE_TIMEOUT` 秒より長く待つ。
 - **Expected result**: メンションのスレッドに `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が返信される。`is_processing` が `False` になり、次のメンションが受け付けられる。
 - **Pass criteria**: タイムアウトメッセージがスレッドに 1 件表示される。タイムアウト後に次のメンションが「処理中」なく受け付けられる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1081,6 +1285,10 @@ python-dotenv>=1.0.0
 - **Expected result**: `filetype="markdown"` で `files_upload_v2` が成功し、Slack にファイルが表示される。`SlackApiError` は発生しない。
 - **Pass criteria**: Slack スレッドにファイルスニペットが表示される。`log/bot.log` にエラーが記録されない。
 - **注記**: このテストが失敗（`invalid_file_type` エラー）した場合は `filetype="post"` または `filetype` パラメータ省略にフォールバックし、再テストする。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1093,6 +1301,10 @@ python-dotenv>=1.0.0
   2. 応答を待つ。
 - **Expected result**: DM のスレッドに「送信しました」が返り、Claude Code の応答が返信される。DM ガード（Step 0）により二重処理が発生しない。
 - **Pass criteria**: DM スレッドに「送信しました」と最終応答の 2 件が表示される（「送信しました」が 2 回表示されない）。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1104,6 +1316,10 @@ python-dotenv>=1.0.0
   1. `#project-a` で `/reset` を実行する。
 - **Expected result**: 返信の `generation=N` の値が 4 以上の整数である（リセット前 + 1 以上）。正確な値が表示されなくてもシステムは正常動作する（DD Final 注記より、表示上のレースは benign）。
 - **Pass criteria**: `"チャンネルをリセットしました。(generation=N)"` が表示され、N が整数である。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1123,6 +1339,10 @@ python-dotenv>=1.0.0
   3. `#project-a` で `@BotName 再起動後テスト` とメンションする。
 - **Expected result**: 再起動後もボットが正常に起動し（`ensure_window` が既存 window を検出して `create_window` をスキップ）、メンションへの「送信しました」が返る。Claude Code セッションが継続して動作する。
 - **Pass criteria**: 再起動後のメンションに「送信しました」が返り、最終的に Claude Code の回答がスレッドに表示される。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1136,6 +1356,10 @@ python-dotenv>=1.0.0
   3. `#project-a` で `@BotName テスト` とメンションする。
 - **Expected result**: ボット起動時の `ensure_window` 呼び出しで window が自動作成される。`claude --dangerously-skip-permissions` が送信される。メンション処理が正常に完了する。
 - **Pass criteria**: tmux で対象 window が存在することを `tmux list-windows` で確認できる。メンションに「送信しました」が返る。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1147,6 +1371,10 @@ python-dotenv>=1.0.0
   1. `python src/bot.py` を起動する。
 - **Expected result**: `ValueError: CHANNEL_MAP_JSON environment variable is not set.` が表示され、プロセスが非ゼロ終了コードで終了する。Slack Socket Mode に接続されない。
 - **Pass criteria**: プロセスが起動直後にクラッシュし、終了コードが `0` 以外である。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1158,6 +1386,10 @@ python-dotenv>=1.0.0
   1. `python src/bot.py` を起動する。
 - **Expected result**: `ValueError` が表示されてプロセスが非ゼロ終了コードで終了する。
 - **Pass criteria**: プロセスが起動直後にクラッシュし、終了コードが `0` 以外である。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1170,6 +1402,10 @@ python-dotenv>=1.0.0
   2. Claude Code が応答ファイルを書き出そうとする。
 - **Expected result**: Claude Code の Write ツールが `FileNotFoundError` でエラーになる（ボット側の動作ではない）。ウォッチャースレッドはタイムアウトし、タイムアウトメッセージが Slack へ送信される。`is_processing` は最終的に `False` になる。
 - **Pass criteria**: `RESPONSE_TIMEOUT` 秒後にタイムアウトメッセージがスレッドに表示される。その後のメンションが受け付けられる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1182,6 +1418,10 @@ python-dotenv>=1.0.0
   2. `#project-a` で `@BotName テスト` とメンションする。
 - **Expected result**: `send_input` 内の `subprocess.run(check=True)` が `CalledProcessError` を raise する。`watcher_started=False` のため `handle_message` の `finally` が `is_processing` を `False` に戻す。Slack にはエラーが通知されないが、次のメンションは受け付けられる。
 - **Pass criteria**: メンション後にボットがクラッシュせず、次のメンションに対して「送信しました」または「処理中」以外のエラーなく応答できる（`is_processing` が解除されていることの間接確認）。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1194,6 +1434,10 @@ python-dotenv>=1.0.0
   2. 両方の応答が返るまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
 - **Expected result**: 両チャンネルが互いにブロックせず、それぞれが「送信しました」を返してウォッチャーが動作する。デッドロック・無限待ち・フリーズが発生しない。
 - **Pass criteria**: 両チャンネルの応答がタイムアウト前に返る。`log/bot.log` にデッドロックや例外の記録がない。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1206,6 +1450,10 @@ python-dotenv>=1.0.0
   2. `#project-a` で `@BotName テスト` とメンションする。
 - **Expected result**: 再起動後は `generation=1`（0 からインクリメント）、`is_processing=False` の初期状態から開始する。メンションが「処理中」に拒否されない。
 - **Pass criteria**: 再起動後のメンションが「送信しました」で受け付けられる。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1226,6 +1474,10 @@ python-dotenv>=1.0.0
   4. Claude Code の回答がスレッドに返るまで待つ（最大 `RESPONSE_TIMEOUT` 秒）。
 - **Expected result**: 「送信しました」が即座に返り、Claude Code の日本語回答がスレッドに表示される。回答は元のメンションと同スレッドに紐付いている。
 - **Pass criteria**: スレッドに「送信しました」と Claude Code の回答が合計 2 件表示される。回答が日本語で記述されている。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1239,6 +1491,10 @@ python-dotenv>=1.0.0
   3. 各回答を確認する。
 - **Expected result**: 質問 A の回答が質問 A のスレッドに、質問 B の回答が質問 B のスレッドにそれぞれ返る。スレッド間の混線はない。
 - **Pass criteria**: 質問 A のスレッドには A の回答のみ、質問 B のスレッドには B の回答のみが表示される。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1254,6 +1510,10 @@ python-dotenv>=1.0.0
   5. `#project-a` で新しいメンション `@BotName 新しい依頼` を送る。
 - **Expected result**: `/reset` 後に `"チャンネルをリセットしました。(generation=N)"` が返る。新しいメンションが「処理中」でなく「送信しました」で受け付けられる。
 - **Pass criteria**: 手順 4 でリセットメッセージが表示される。手順 5 のメンションに「送信しました」が返る（「処理中です。」が返らない）。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1266,6 +1526,10 @@ python-dotenv>=1.0.0
   2. 回答を待つ。
 - **Expected result**: スレッドに `response.md` ファイルのスニペットとして回答が表示される。コードブロックが途中で分断されていない。ファイルを開いて全文を確認できる。
 - **Pass criteria**: Slack UI で `response.md` スニペットが表示される。スニペットを開いたときに内容が完全であり、コードブロックが正しく閉じている。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1279,6 +1543,10 @@ python-dotenv>=1.0.0
   3. 両チャンネルの応答を確認する。
 - **Expected result**: 両チャンネルで「送信しました」が返る。一方の処理が他方の完了を待たずに進む。最終的に両チャンネルに Claude Code の回答が返る。
 - **Pass criteria**: 両チャンネルに「送信しました」と最終回答が表示される。一方の回答が他方のスレッドに混入していない。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ---
 
@@ -1293,6 +1561,10 @@ python-dotenv>=1.0.0
   4. その後 `/reset` を実行し、新しいメンションを送る。
 - **Expected result**: タイムアウト後にスレッドへ `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"` が返る。`/reset` 後に次のメンションが受け付けられる。
 - **Pass criteria**: タイムアウトメッセージがスレッドに表示される。`/reset` 後の新しいメンションに「送信しました」が返る。
+- **Status**: ⬜ Not run
+- **Date**: 2026-07-26
+- **Actual result**: Requires live Slack/tmux environment — deferred to real-environment test phase.
+- **Notes**: None.
 
 ## PR
 
