@@ -102,6 +102,7 @@ class ChannelConfig:
 | `TMUX_SESSION` | `str` | `os.environ.get("TMUX_SESSION", "claude_session")` | tmux セッション名 |
 | `RESPONSE_TIMEOUT` | `int` | `int(os.environ.get("RESPONSE_TIMEOUT", "120"))` | 応答待ちタイムアウト秒数 |
 | `POLL_INTERVAL` | `float` | `2.0` | ファイルポーリング間隔（秒） |
+| `SETTLE_DURATION` | `float` | `1.0` | settle判定の安定確認待ち時間（秒） |
 | `MAX_MESSAGE_LENGTH` | `int` | `3000` | Slack 投稿の文字数閾値 |
 | `CHANNEL_MAP` | `dict[str, ChannelConfig]` | `_load_channel_map()` で構築 | チャンネル ID → ChannelConfig |
 
@@ -230,19 +231,29 @@ class ChannelState:
 - 関数先頭で以下を取得する:
   - `state = _channel_states[channel_id]`（`_channel_states` 辞書自体は初期化後に変更されないため、lock なしでスレッドから参照して安全）
   - `start_time = time.time()`
-- **検出対象は `response_file` のみ。** Claude Code が Write ツールで直接書き出すファイルをポーリングする。mv ステップなし、settle 判定なし。既存 Telegram Bot と同等のシンプルな実装。
+- **検出対象は `response_file` のみ。** Claude Code が Write ツールで直接書き出すファイルをポーリングする。mv ステップなし。書き込み途中のファイルを読まないよう、ファイル出現後にサイズ安定を確認する settle 判定を挟む。
 
 **ポーリングループの動作（`POLL_INTERVAL` 秒間隔）:**
 
 1. 世代失効チェック: `with state.lock:` 内で `state.generation != own_gen` なら即座にリターンする（失効スレッド）
-2. `os.path.exists(response_file)` を確認する
-3. 存在する場合:
-   - `response_file` からファイル内容を読み取る
-   - `response_file` を削除する（`os.remove`）
-   - `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
-   - ループを抜けてリターンする
-4. タイムアウト判定: `time.time() - start_time >= RESPONSE_TIMEOUT` なら タイムアウト処理へ移行する
-5. `time.sleep(POLL_INTERVAL)` してループ先頭へ戻る
+2. タイムアウト判定: `time.time() - start_time >= RESPONSE_TIMEOUT` なら タイムアウト処理へ移行する
+3. `os.path.exists(response_file)` を確認する
+4. 存在する場合（settle 判定ブランチ）:
+   a. `size1 = os.path.getsize(response_file)` を記録する
+   b. `time.sleep(SETTLE_DURATION)` で安定待ちする
+   c. 世代失効チェック: `with state.lock:` 内で `state.generation != own_gen` なら即座にリターンする（settle 待ち中に /reset が来た場合に対応）
+   d. タイムアウト判定: `time.time() - start_time >= RESPONSE_TIMEOUT` なら タイムアウト処理へ移行する（settle 待ち中にタイムアウトを超過した場合に対応）
+   e. `os.path.exists(response_file)` を再確認する
+      - 存在する場合:
+        - `size2 = os.path.getsize(response_file)` を取得する
+        - `size1 == size2`（サイズ変化なし = 書き込み完了）なら:
+          - `response_file` からファイル内容を読み取る
+          - `response_file` を削除する（`os.remove`）
+          - `file_handler.send_long_text(client, channel_id, content, thread_ts)` を1回呼ぶ
+          - ループを抜けてリターンする
+        - `size1 != size2`（まだ書き込み中）なら: ポーリングループ先頭へ戻る（`time.sleep(POLL_INTERVAL)` を挟んで次ポーリングへ）
+      - 存在しない場合（settle 待ち中にファイルが削除された）: ポーリングループ先頭へ戻る
+5. ファイルが存在しない場合: `time.sleep(POLL_INTERVAL)` してループ先頭へ戻る
 
 - タイムアウト（`RESPONSE_TIMEOUT` 秒経過）した場合:
   - スレッド返信: `"タイムアウトしました。Claude Code が応答ファイルを生成しませんでした。/reset で再試行してください。"`
