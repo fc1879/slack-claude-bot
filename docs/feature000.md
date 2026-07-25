@@ -109,8 +109,10 @@ class ChannelConfig:
 #### `_load_channel_map() -> dict[str, ChannelConfig]`
 
 - `CHANNEL_MAP_JSON` 環境変数から JSON 文字列を読み込む
-- JSON スキーマ: `{"C01234ABCDE": {"target": "claude_session:project-a", "cwd": "/path/to/project", "tmp": "/path/to/tmp"}}`
+- JSON スキーマ（1チャンネルの例）: `{"C01234ABCDE": {"target": "claude_session:project-a", "cwd": "/path/to/project", "tmp": "/path/to/tmp"}}`
+- 複数チャンネルはトップレベルオブジェクトにキーを追加するだけでよい: `{"C01234ABCDE": {...}, "C09999ZZZZZ": {...}}`
 - パース失敗時は `ValueError` を raise し、起動時に即座にクラッシュさせる（サイレント起動禁止）
+- **`cwd` および `tmp` ディレクトリは起動前に存在していなければならない。** ボットはこれらを自動作成しない。存在しない場合、応答ファイル書き込み時に `FileNotFoundError` が発生する（起動時チェックは行わない）。
 
 ---
 
@@ -324,7 +326,18 @@ SLACK_BOT_TOKEN=xoxb-your-slack-bot-token
 SLACK_APP_TOKEN=xapp-your-slack-app-token
 TMUX_SESSION=claude_session
 RESPONSE_TIMEOUT=120
+
+# CHANNEL_MAP_JSON: チャンネルID → tmuxターゲット・パスのマッピング（JSON形式）
+# チャンネルIDはSlackの「チャンネル詳細」から取得できる（例: C01234ABCDE）
+# target: tmux の "session:window" 形式
+# cwd:    Claude Code の作業ディレクトリ（絶対パス、起動前に存在していること）
+# tmp:    応答ファイル出力ディレクトリ（絶対パス、起動前に存在していること）
+#
+# 1チャンネルの例:
 CHANNEL_MAP_JSON={"C01234ABCDE": {"target": "claude_session:project-a", "cwd": "/absolute/path/to/project", "tmp": "/absolute/path/to/tmp"}}
+#
+# 複数チャンネルの例:
+# CHANNEL_MAP_JSON={"C01234ABCDE": {"target": "claude_session:project-a", "cwd": "/path/to/project-a", "tmp": "/path/to/tmp-a"}, "C09999ZZZZZ": {"target": "claude_session:project-b", "cwd": "/path/to/project-b", "tmp": "/path/to/tmp-b"}}
 ```
 
 ---
@@ -380,6 +393,31 @@ python-dotenv>=1.0.0
 ## 関連ドキュメント
 
 （Retrospective Analyst フェーズで記載）
+
+---
+
+## Design Review (Addendum — CHANNEL_MAP_JSON concern)
+
+Status: ✅ Additions approved
+
+### Assessment
+
+#### Addition 1 — Multi-channel JSON format example in `_load_channel_map()`
+
+The single-channel example was already present. The multi-channel example (`{"C01234ABCDE": {...}, "C09999ZZZZZ": {...}}`) and the accompanying note ("トップレベルオブジェクトにキーを追加するだけでよい") are purely illustrative. They add no new implementation requirements, no new invariants, and no new code paths. The multi-channel structure is already implied by the `dict[str, ChannelConfig]` return type — the example simply makes it unambiguous to the operator configuring the environment variable. The addition is appropriate and helpful.
+
+#### Addition 2 — "Directories must pre-exist" note and `.env.example` inline comments
+
+The note in `_load_channel_map()` (line 115) and the matching inline comments in `.env.example` (lines 333–334) make an implicit behavior explicit: the bot does not auto-create `cwd` or `tmp` directories.
+
+This is the correct design choice for two reasons:
+
+1. `cwd` is a pre-existing Claude Code project directory. Auto-creating it at a typo'd path would silently mask misconfiguration. Letting `tmux new-window -c {cwd}` fail with a non-existent path is the right failure mode.
+2. `tmp` not existing will cause `FileNotFoundError` when Claude Code attempts to write the response file. This is a visible, diagnosable failure — not a silent one.
+
+The note also documents that no startup check is performed. This tradeoff (late detection on first message vs. early detection at boot) is acceptable for this system and is now documented rather than assumed. The note does not conflict with any existing DD specification or CLAUDE.md principle.
+
+Both additions are internally consistent: the `_load_channel_map()` note and the `.env.example` comments say the same thing in the same terms.
 
 ---
 
