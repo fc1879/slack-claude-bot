@@ -1,0 +1,15 @@
+# channel_map.toml
+# Slack チャンネルID → tmux ターゲット・パスのマッピング
+# チャンネルIDは Slack の「チャンネル詳細」画面の一番下から取得できます
+
+# ── プロジェクトA ──────────────────────────────────────────────
+[channels.C01234ABCDE]
+target = "claude_session:project-a"  # tmux の "セッション:ウィンドウ" 形式
+cwd    = "/absolute/path/to/project" # Claude Code の作業ディレクトリ（絶対パス）
+tmp    = "/absolute/path/to/tmp"     # 応答ファイル出力ディレクトリ（絶対パス、mkdir -p で事前作成）
+
+# ── 追加チャンネルはここに続けて記載 ──────────────────────────
+# [channels.C09999ZZZZZ]
+# target = "claude_session:project-b"
+# cwd    = "/path/to/project-b"
+# tmp    = "/path/to/tmp-b"

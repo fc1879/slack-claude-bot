@@ -1,6 +1,11 @@
-import json
 import os
+import sys
 from dataclasses import dataclass
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,24 +25,25 @@ MAX_MESSAGE_LENGTH: int = 3000
 
 CHANNEL_MAP_FILE: str = os.environ.get(
     "CHANNEL_MAP_FILE",
-    os.path.join(_PROJECT_ROOT, "channel_map.json"),
+    os.path.join(_PROJECT_ROOT, "channel_map.toml"),
 )
 
 
 def _load_channel_map() -> dict[str, ChannelConfig]:
     if not os.path.exists(CHANNEL_MAP_FILE):
         raise FileNotFoundError(
-            f"channel_map.json not found: {CHANNEL_MAP_FILE}\n"
-            "Copy channel_map.example.json to channel_map.json and fill in your values."
+            f"channel_map.toml not found: {CHANNEL_MAP_FILE}\n"
+            "Copy channel_map.example.toml to channel_map.toml and fill in your values."
         )
     try:
-        with open(CHANNEL_MAP_FILE, encoding="utf-8") as f:
-            parsed = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"{CHANNEL_MAP_FILE} is not valid JSON: {e}") from e
+        with open(CHANNEL_MAP_FILE, "rb") as f:
+            parsed = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"{CHANNEL_MAP_FILE} is not valid TOML: {e}") from e
 
+    channels = parsed.get("channels", {})
     result: dict[str, ChannelConfig] = {}
-    for channel_id, cfg in parsed.items():
+    for channel_id, cfg in channels.items():
         try:
             result[channel_id] = ChannelConfig(
                 target=cfg["target"],
@@ -46,7 +52,7 @@ def _load_channel_map() -> dict[str, ChannelConfig]:
             )
         except KeyError as e:
             raise ValueError(
-                f"channel_map.json entry for '{channel_id}' is missing key {e}"
+                f"channel_map.toml entry for '{channel_id}' is missing key {e}"
             ) from e
     return result
 
