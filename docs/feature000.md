@@ -740,3 +740,67 @@ This is a full scratch review of the entire DD in its current state. All prior r
 - `handle_reset` reads `state.generation` outside the lock to compose the reply string (`generation={state.generation}`). This is a benign display-only race — the value shown may be stale by nanoseconds in extreme concurrent-reset scenarios, but it has no effect on correctness or ChannelState invariants. No DD change needed.
 - `files_upload_v2` with `filetype="markdown"`: confirm this value is accepted by the Slack API before shipping. If rejected, use `filetype="post"` or omit `filetype`. Either fallback is compliant with the single-send, no-retry constraint.
 - `_channel_states` dict entries must not be added or removed after initialization. This is the precondition for lock-free reads from watcher threads. Do not write code that modifies the dict at runtime.
+
+---
+
+## Code Review
+
+Status: ✅ Approved
+
+Notes:
+
+### Security (Checklist §1)
+- Authorization guard in `handle_message`: step 0 DM guard fires first, then `channel_id not in _channel_states` check fires before any state mutation or tmux call. `handle_reset` applies the same authorization check immediately after `ack()`. Early-return pattern is correct on all paths.
+- No hardcoded secrets. All tokens loaded via `load_dotenv()` + `os.environ["SLACK_BOT_TOKEN"]` / `os.environ["SLACK_APP_TOKEN"]`. `.env.example` contains only placeholder values.
+- Response file path constructed server-side from `state.tmp + channel_id + own_gen`. No user-supplied path components. No path traversal risk.
+- `send_input` uses `subprocess.run` list form (`shell=False`). User text is a list element — no shell expansion, no quoting needed or applied. Confirmed no `shlex.quote` present.
+
+### Core Data Flow Integrity (Checklist §2)
+- Response file relay design intact. Claude Code writes `tmp/claude_bot_response_{channel_id}_{gen}.txt`; watcher polls; bot posts.
+- `_build_prompt` contains all 5 DD-required clauses: `[TOP PRIORITY]`, final-answer-only constraint, no draft constraint, `[確認]` as final answer, Japanese language, sole-output-path constraint.
+- Path `claude_bot_response_{channel_id}_{own_gen}.txt` is unique per channel and generation. No collision possible between concurrent channels or concurrent generations on the same channel.
+
+### ChannelState Invariants (Checklist §3)
+- `handle_message`: `with state.lock:` atomically wraps `is_processing` check + `generation += 1` + `is_processing = True` + `own_gen = state.generation`. Correct single RMW.
+- Slack API rejection reply (`already_processing`) is posted **outside** the lock using the `already_processing` flag pattern. Lock is never held across I/O.
+- `_watch_for_response` `finally` block: `with state.lock: if state.generation == own_gen: state.is_processing = False`. Runs on all exit paths (normal, timeout, generation-expired). Expired watcher correctly skips clear via generation guard.
+- `watcher_started = False` declared before `try:`, set to `True` after `Thread.start()`. `handle_message` `finally` only clears `is_processing` when `not watcher_started` — i.e. when watcher never started. When watcher is running, `is_processing` responsibility is fully delegated to the watcher's `finally`. This correctly prevents the race where `handle_message` would clear `is_processing` while the watcher is still active.
+- `/reset` (own channel): `with state.lock: state.generation += 1; state.is_processing = False` — both mutations atomic under one lock. Correct.
+- `/reset all`: iterates all `_channel_states.values()`, acquires each channel's own lock independently. Correct (no global lock).
+- No global lock or global `is_processing` present anywhere.
+
+### settle判定 (DD §`_watch_for_response`)
+- Loop step sequence verified: size1 → `SETTLE_DURATION` sleep → generation recheck (lines 66–68) → timeout recheck (lines 70–76) → `os.path.exists` recheck (line 78) → size2 compare → `size1 == size2` → read+delete+send+return. Size mismatch falls through to `time.sleep(POLL_INTERVAL)` at line 88 then loops back to top. Settle-wait file-deleted case falls through to the same `time.sleep(POLL_INTERVAL)`. Both match DD spec exactly.
+- Timeout check occurs at both polling-loop top (line 54) and inside settle-wait (line 70). Timeout can interrupt mid-settle. Correct per DD step 4d.
+
+### Thread Reply Correctness (Checklist §4)
+- `handle_message` "送信しました" reply, `_watch_for_response` success reply (via `send_long_text`), and `_watch_for_response` timeout reply all use `thread_ts`. Correct.
+- `handle_reset` posts without `thread_ts` (top-level channel message). Correct per DD Final Design Review note.
+- `thread_ts = event.get("thread_ts") or event["ts"]` per-request. Passed as argument to `_watch_for_response`. Not stored on `ChannelState`. Correct: each generation has its own `thread_ts`.
+
+### Long Message Handling (Checklist §5)
+- `files_upload_v2` used (not deprecated `files.upload`). `filetype="markdown"` per DD. Fallback noted in DD Final notes if Slack rejects this value.
+- No message splitting. Whole text posted or uploaded as file. No code-fence split risk.
+- `MAX_MESSAGE_LENGTH = 3000`. Correct.
+
+### Slack API Idempotency (Checklist §6)
+- `send_long_text` sends exactly once per call path. No retry loop. `SlackApiError` propagates to caller.
+- No retry loops around any Slack API call in any file.
+
+### tmux Window Management (Checklist §7)
+- `ensure_window` and `create_window` both use `f"{session}:{window}"` target. Correct.
+- No reserved window names introduced.
+
+### Change Scope Discipline (Checklist §8)
+- Files modified: `src/__init__.py`, `src/config.py`, `src/channel_state.py`, `src/tmux_handler.py`, `src/file_handler.py`, `src/bot.py`, `.env.example`, `requirements.txt`. All exactly match DD change scope. `app.py` left in place (not modified, not deleted). No out-of-scope changes.
+- No unused imports. All imports in every file are consumed.
+- No `print()` or debug statements.
+- `requirements.txt`: `anthropic` removed, `slack-bolt>=1.21.0` + `python-dotenv>=1.0.0` present. Matches DD.
+- `.env.example`: `ANTHROPIC_API_KEY` / `CLAUDE_MODEL` absent; `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `TMUX_SESSION`, `RESPONSE_TIMEOUT`, `CHANNEL_MAP_JSON` with single-channel and multi-channel examples. Matches DD.
+
+### Notes for Test Designer
+- The `already_processing` flag pattern means the rejection reply is sent outside the lock. Test should verify no deadlock or missed reply under concurrent message arrival.
+- `watcher_started = False` / `True` pattern: test that exceptions thrown between `state.lock` release and `Thread.start()` (e.g. tmux subprocess failure) correctly clear `is_processing` via the `finally` block.
+- settle判定: test with a file that changes size during the settle window to confirm the loop correctly re-polls rather than sending partial content.
+- `files_upload_v2` with `filetype="markdown"`: verify this value is accepted by the Slack API in IT. If rejected, fall back to `filetype="post"` or omit (single-send, no-retry constraint still applies).
+- `handle_reset` reads `state.generation` outside the lock for the reply string (line 216). This is a known benign display race per DD Final notes. No correctness test needed, but verify the reply string appears with a plausible generation number.
