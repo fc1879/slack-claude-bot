@@ -25,10 +25,17 @@ def send_input(session: str, text: str, window: str) -> None:
     # text is passed as a list element — shell is not involved, so no quoting needed.
     # Applying shlex.quote here would send literal quote characters to Claude Code.
     subprocess.run(
-        ["tmux", "send-keys", "-t", f"{session}:{window}", text, "Enter"],
+        ["tmux", "send-keys", "-t", f"{session}:{window}", text],
         check=True,
     )
-    # Brief pause to ensure tmux flushes the keys to the pty buffer.
+    # Wait for the terminal to fully buffer the (potentially long) text before
+    # sending Enter. Without this delay, Enter can arrive before Claude Code's
+    # input handler has finished receiving the pasted text.
+    time.sleep(0.5)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", f"{session}:{window}", "Enter"],
+        check=True,
+    )
     time.sleep(0.3)
 
 
